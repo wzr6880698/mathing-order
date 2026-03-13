@@ -4,6 +4,7 @@ import re
 import io
 from datetime import datetime
 import openpyxl
+import numpy as np
 
 
 def col_num_to_letter(n):
@@ -17,7 +18,7 @@ def col_num_to_letter(n):
 
 def like_order_string(s):
     """判断一个字符串是否像订单号"""
-    if not isinstance(s, str):
+    if pd.isna(s) or not isinstance(s, str):
         return False
     if len(s) < 3 or len(s) > 50:
         return False
@@ -30,77 +31,158 @@ def like_order_string(s):
     return False
 
 
-def fix_excel_column_names(file_obj):
+def is_valid_header_cell(cell_value):
+    """判断单元格值是否为有效表头（非空、非纯数字、非订单号格式）"""
+    if pd.isna(cell_value):
+        return False
+    cell_str = str(cell_value).strip()
+    # 空字符串不是有效表头
+    if cell_str == '':
+        return False
+    # 纯数字（无单位）大概率不是表头
+    if re.match(r'^\d+(\.\d+)?$', cell_str) and not like_order_string(cell_str):
+        return False
+    # 订单号格式不是表头
+    if like_order_string(cell_str):
+        return False
+    # 长度超过50的大概率不是表头
+    if len(cell_str) > 50:
+        return False
+    return True
+
+
+def auto_detect_header_row(file_obj):
     """
-    从Excel文件中读取真实列名（解决Unnamed问题）
-    返回：修复后的DataFrame + 原始列名列表
+    智能识别Excel中的真实表头行（核心功能）
+    返回：(header_row_index: int, header_names: list)
+    - header_row_index: 表头行的索引（0-based），None表示未找到
+    - header_names: 表头名称列表
     """
-    # 第一步：用openpyxl读取原始列名（保留合并单元格/真实表头）
     wb = openpyxl.load_workbook(file_obj, data_only=True)
     ws = wb.active
 
-    # 获取表头行（默认第一行，可适配多行表头）
-    header_row = []
-    for cell in ws[1]:  # 读取第一行作为表头
-        cell_value = cell.value
-        if cell_value is None:
-            # 空单元格用"列字母+行号"命名（如A1、B1），友好且唯一
-            header_row.append(f"{cell.column_letter}{cell.row}")
+    max_check_rows = 20  # 最多检查前20行，覆盖大部分标题场景
+    header_candidates = []
+
+    # 遍历前20行，评估每行作为表头的可能性
+    for row_idx in range(min(max_check_rows, ws.max_row)):
+        row_cells = ws[row_idx + 1]  # openpyxl是1-based
+        row_values = [cell.value for cell in row_cells]
+
+        # 计算该行的有效表头单元格数量
+        valid_header_count = sum(1 for val in row_values if is_valid_header_cell(val))
+        total_non_empty = sum(1 for val in row_values if val is not None and str(val).strip() != '')
+
+        # 有效表头占比 = 有效表头数 / 非空单元格数（避免全空行）
+        if total_non_empty == 0:
+            header_score = 0
         else:
-            # 清理表头中的特殊字符和空格
-            clean_val = str(cell_value).strip().replace('\n', ' ').replace('\t', ' ')
-            # 去重处理
-            if clean_val in header_row:
-                count = header_row.count(clean_val) + 1
-                header_row.append(f"{clean_val}_{count}")
+            header_score = valid_header_count / total_non_empty
+
+        # 记录候选行（行索引、得分、值列表）
+        header_candidates.append({
+            'row_idx': row_idx,
+            'score': header_score,
+            'values': row_values
+        })
+
+    # 找到得分最高的行作为表头行
+    if not header_candidates:
+        return 0, ['列1', '列2', '列3']  # 兜底
+
+    best_header = max(header_candidates, key=lambda x: x['score'])
+    header_row_idx = best_header['row_idx']
+    header_values = best_header['values']
+
+    # 清理表头名称
+    clean_headers = []
+    for val in header_values:
+        if val is None:
+            # 空表头用列位置命名（如A、B、C）
+            col_idx = len(clean_headers)
+            col_letter = col_num_to_letter(col_idx)
+            clean_headers.append(f'{col_letter}列')
+        else:
+            # 清理特殊字符和重复
+            clean_val = str(val).strip().replace('\n', ' ').replace('\t', ' ')
+            clean_val = re.sub(r'[^\w\s\u4e00-\u9fff]', '', clean_val)
+            if clean_val == '':
+                col_idx = len(clean_headers)
+                col_letter = col_num_to_letter(col_idx)
+                clean_headers.append(f'{col_letter}列')
             else:
-                header_row.append(clean_val)
+                # 去重处理
+                if clean_val in clean_headers:
+                    count = clean_headers.count(clean_val) + 1
+                    clean_val = f'{clean_val}_{count}'
+                clean_headers.append(clean_val)
 
-    # 第二步：读取数据（跳过表头行）
-    df = pd.read_excel(file_obj, header=None, skiprows=1)
+    return header_row_idx, clean_headers
 
-    # 第三步：设置修复后的列名
-    df.columns = header_row[:len(df.columns)]  # 防止列数不匹配
 
-    # 第四步：处理空行和全空列
-    df = df.dropna(how='all')  # 删除全空行
-    df = df.dropna(axis=1, how='all')  # 删除全空列
+def read_excel_with_auto_header(file_obj):
+    """
+    智能读取Excel文件（自动识别表头行）
+    返回：处理后的DataFrame
+    """
+    # 第一步：识别表头行
+    header_row_idx, header_names = auto_detect_header_row(file_obj)
 
-    return df
+    # 重置文件指针（避免读取失败）
+    file_obj.seek(0)
+
+    # 第二步：读取数据（跳过表头行之前的行）
+    df = pd.read_excel(
+        file_obj,
+        header=None,
+        skiprows=header_row_idx + 1,  # skiprows是跳过的行数，表头行本身不跳过
+        engine='openpyxl'
+    )
+
+    # 第三步：设置表头名称（截断/补全以匹配列数）
+    df_cols = len(df.columns)
+    if len(header_names) > df_cols:
+        header_names = header_names[:df_cols]
+    elif len(header_names) < df_cols:
+        # 补全列名
+        for i in range(len(header_names), df_cols):
+            col_letter = col_num_to_letter(i)
+            header_names.append(f'{col_letter}列')
+
+    df.columns = header_names
+
+    # 第四步：清理数据（删除全空行/列）
+    df = df.dropna(how='all')
+    df = df.dropna(axis=1, how='all')
+
+    # 重置索引
+    df = df.reset_index(drop=True)
+
+    return df, header_row_idx
 
 
 def fill_merged_cells(df, order_col):
     """填充合并单元格导致的空值（针对订单号列）"""
-    # 向前填充订单号列的空值（合并单元格在Excel中读取后为空，需继承上一行订单号）
     if order_col in df.columns:
-        # 先将NaN转为空字符串，再填充
+        # 先将NaN转为空字符串，再向前填充
         df[order_col] = df[order_col].fillna('').astype(str)
         df[order_col] = df[order_col].replace('', method='ffill')
     return df
 
 
 def detect_domestic_order_column(df):
-    """
-    智能识别内销订单号列（优先级排序）
-    返回：最可能的订单号列名 / None
-    """
+    """智能识别内销订单号列"""
     # 内销订单号列关键词（按优先级排序）
     domestic_keywords = [
-        # 高优先级：明确的订单号关键词
         '订单号', '内销订单号', '订单编号', '内销编号', '单号', '内销单号',
-        # 中优先级：通用编号关键词
-        '编号', '序号', 'ID', 'id', 'No', 'NO', 'no',
-        # 低优先级：首列（内销明细订单号通常在首列）
-        df.columns[0] if len(df.columns) > 0 else None
+        '编号', '序号', 'ID', 'id', 'No', 'NO', 'no', 'A列', 'B列', 'C列'
     ]
 
     # 遍历关键词找匹配列
     for keyword in domestic_keywords:
-        if keyword is None:
-            continue
-        # 模糊匹配列名
         for col in df.columns:
-            if keyword in str(col):
+            col_str = str(col).lower()
+            if keyword.lower() in col_str:
                 return col
 
     # 如果没有匹配，返回非空值最多的列（订单号列通常非空值多）
@@ -108,7 +190,8 @@ def detect_domestic_order_column(df):
     if not non_null_counts.empty:
         return non_null_counts.idxmax()
 
-    return None
+    # 最后返回第一列（内销订单号通常在首列）
+    return df.columns[0] if len(df.columns) > 0 else None
 
 
 def detect_export_order_column(df):
@@ -127,14 +210,11 @@ def detect_export_order_column(df):
     if not non_null_counts.empty:
         return non_null_counts.idxmax()
 
-    return None
+    return df.columns[0] if len(df.columns) > 0 else None
 
 
 def detect_file_type_and_order_col(df, file_name):
-    """
-    综合识别：文件类型 + 推荐订单号列
-    返回：(file_type: 'domestic'/'export', recommend_col: str)
-    """
+    """综合识别：文件类型 + 推荐订单号列"""
     # 先通过文件名判断
     if any(keyword in file_name.lower() for keyword in ['内销', 'domestic']):
         return 'domestic', detect_domestic_order_column(df)
@@ -142,7 +222,6 @@ def detect_file_type_and_order_col(df, file_name):
         return 'export', detect_export_order_column(df)
 
     # 文件名无标识，通过内容判断
-    # 统计内销/外销特征词
     col_names = ' '.join([str(col).lower() for col in df.columns])
     domestic_score = sum(1 for kw in ['内销', '国内'] if kw in col_names)
     export_score = sum(1 for kw in ['外销', '出口', 'export'] if kw in col_names)
@@ -155,7 +234,7 @@ def detect_file_type_and_order_col(df, file_name):
 
 def main():
     st.set_page_config(
-        page_title="订单匹配工具（内销+外销通用）",
+        page_title="智能订单匹配工具",
         page_icon="🔗",
         layout="wide",
         initial_sidebar_state="expanded"
@@ -163,28 +242,34 @@ def main():
 
     # 侧边栏说明
     with st.sidebar:
-        st.header("📖 使用说明")
+        st.header("📖 智能匹配工具 - 使用说明")
         st.markdown("""
-        ### 核心优势
-        ✅ 智能识别内销/外销文件，无需手动切换
-        ✅ 保留原始列名，解决Unnamed列名显示问题
-        ✅ 自动填充内销明细表合并单元格空值
-        ✅ 精准推荐订单号列，减少手动选择
-        ✅ 订单号文本格式，避免科学计数法
+        ### 🚀 核心优势
+        ✅ **全自动表头识别**：无需固定跳过行数，适配任意标题格式
+        ✅ **智能列名展示**：无Unnamed列名，显示真实友好的列名
+        ✅ **内销/外销兼容**：自动识别文件类型，无需手动切换
+        ✅ **合并单元格处理**：自动填充内销明细表空订单号
+        ✅ **订单号格式保护**：文本格式，避免科学计数法
 
-        ### 操作步骤
+        ### 📝 操作步骤
         1. 上传汇总表（内销/外销Excel）
         2. 上传明细表（内销/外销Excel）
-        3. 确认/选择订单号列（系统已智能推荐）
-        4. 点击匹配，查看结果
-        5. 下载完整匹配结果
+        3. 确认系统推荐的订单号列（可手动调整）
+        4. 点击匹配，查看智能分析结果
+        5. 下载完整匹配数据
+
+        ### 💡 适配场景
+        - 标题占任意行数的Excel文件
+        - 内销/外销不同格式的文件
+        - 包含合并单元格的明细表
+        - 列名不规范的Excel文件
         """)
         st.markdown("---")
-        st.info("版本: v3.0.0（智能列名+最优用户体验）")
+        st.info("版本: v4.0.0（全自动智能表头识别）")
 
     # 主界面
-    st.title("🔗 订单匹配工具（内销+外销通用）")
-    st.markdown("### 智能识别列名 | 完美兼容内销/外销格式 | 友好用户体验")
+    st.title("🔗 智能订单匹配工具（全自动表头识别）")
+    st.markdown("### 适配任意格式 | 无需手动调整行数 | 内销/外销全覆盖")
     st.markdown("---")
 
     # 文件上传区域
@@ -192,10 +277,10 @@ def main():
     with col1:
         st.subheader("📊 汇总表")
         summary_file = st.file_uploader(
-            "上传汇总Excel文件（内销/外销均可）",
+            "上传汇总Excel文件（支持任意标题行数）",
             type=['xlsx', 'xls'],
             key="summary_file",
-            help="支持.xlsx/.xls格式，自动识别列名"
+            help="自动识别表头行，无需手动调整"
         )
         if summary_file:
             st.success(f"✅ 已上传: {summary_file.name}")
@@ -203,73 +288,85 @@ def main():
     with col2:
         st.subheader("📋 明细表")
         detail_file = st.file_uploader(
-            "上传明细Excel文件（内销/外销均可）",
+            "上传明细Excel文件（支持合并单元格）",
             type=['xlsx', 'xls'],
             key="detail_file",
-            help="内销文件自动处理合并单元格空值"
+            help="内销文件自动填充合并单元格空值"
         )
         if detail_file:
             st.success(f"✅ 已上传: {detail_file.name}")
 
-    # 数据读取和预处理（核心：修复列名）
+    # 数据读取和预处理（核心：自动识别表头）
     df_summary = None
     df_detail = None
     summary_type = None
     detail_type = None
     summary_recommend_col = None
     detail_recommend_col = None
+    summary_header_row = 0
+    detail_header_row = 0
 
     # 读取汇总表
     if summary_file:
         try:
-            # 关键：使用修复列名的函数读取
-            df_summary = fix_excel_column_names(summary_file)
-            st.info(f"📊 汇总表：{len(df_summary)} 行 | {len(df_summary.columns)} 列")
+            # 关键：智能读取（自动识别表头）
+            df_summary, summary_header_row = read_excel_with_auto_header(summary_file)
+            st.info(f"""
+            📊 汇总表分析结果：
+            - 总行数：{len(df_summary)} 行
+            - 总列数：{len(df_summary.columns)} 列
+            - 自动识别表头行：第 {summary_header_row + 1} 行
+            """)
 
             # 识别文件类型和推荐列
             summary_type, summary_recommend_col = detect_file_type_and_order_col(
                 df_summary, summary_file.name
             )
             type_text = "内销" if summary_type == "domestic" else "外销"
-            st.success(f"📌 自动识别：{type_text}格式")
+            st.success(f"📌 文件类型：{type_text}格式")
             if summary_recommend_col:
                 st.info(f"💡 推荐订单号列：**{summary_recommend_col}**")
 
         except Exception as e:
             st.error(f"❌ 读取汇总表失败：{str(e)}")
-            st.warning("建议检查文件格式，确保是标准Excel文件")
+            st.warning("建议检查文件格式，确保是标准Excel文件（.xlsx/.xls）")
 
     # 读取明细表
     if detail_file:
         try:
-            # 关键：使用修复列名的函数读取
-            df_detail = fix_excel_column_names(detail_file)
-            st.info(f"📋 明细表：{len(df_detail)} 行 | {len(df_detail.columns)} 列")
+            # 关键：智能读取（自动识别表头）
+            df_detail, detail_header_row = read_excel_with_auto_header(detail_file)
+            st.info(f"""
+            📋 明细表分析结果：
+            - 总行数：{len(df_detail)} 行
+            - 总列数：{len(df_detail.columns)} 列
+            - 自动识别表头行：第 {detail_header_row + 1} 行
+            """)
 
             # 识别文件类型和推荐列
             detail_type, detail_recommend_col = detect_file_type_and_order_col(
                 df_detail, detail_file.name
             )
             type_text = "内销" if detail_type == "domestic" else "外销"
-            st.success(f"📌 自动识别：{type_text}格式")
+            st.success(f"📌 文件类型：{type_text}格式")
 
             # 内销明细表自动填充合并单元格空值
             if detail_type == "domestic" and detail_recommend_col:
                 df_detail = fill_merged_cells(df_detail, detail_recommend_col)
-                st.success(f"✅ 已填充内销明细表【{detail_recommend_col}】列合并单元格空值")
+                st.success(f"✅ 已填充【{detail_recommend_col}】列合并单元格空值")
 
             if detail_recommend_col:
                 st.info(f"💡 推荐订单号列：**{detail_recommend_col}**")
 
         except Exception as e:
             st.error(f"❌ 读取明细表失败：{str(e)}")
-            st.warning("建议检查文件格式，确保是标准Excel文件")
+            st.warning("建议检查文件格式，确保是标准Excel文件（.xlsx/.xls）")
 
     st.markdown("---")
 
     # 列选择区域（友好列名展示）
     if df_summary is not None and df_detail is not None:
-        st.subheader("🏷️ 选择订单号列（系统已智能推荐）")
+        st.subheader("🏷️ 订单号列选择（系统智能推荐）")
 
         col1, col2 = st.columns(2)
         with col1:
@@ -281,7 +378,7 @@ def main():
                 index=df_summary.columns.tolist().index(summary_recommend_col)
                 if summary_recommend_col in df_summary.columns else 0,
                 key="summary_col",
-                help="选择包含订单号的列，系统已推荐最优列"
+                help="系统已根据内容推荐最优列"
             )
 
         with col2:
@@ -307,14 +404,14 @@ def main():
         st.markdown("---")
         st.info(f"""
         📌 匹配配置确认：
-        - 汇总表订单号列：**{summary_col}**
-        - 明细表订单号列：**{detail_col}**
+        - 汇总表表头行：第 {summary_header_row + 1} 行 | 订单号列：**{summary_col}**
+        - 明细表表头行：第 {detail_header_row + 1} 行 | 订单号列：**{detail_col}**
         - 文件类型：汇总表({summary_type}) | 明细表({detail_type})
         """)
 
         # 匹配按钮
         if st.button("🔗 开始智能匹配", type="primary", use_container_width=True):
-            with st.spinner("正在执行订单匹配，请稍候..."):
+            with st.spinner("正在执行智能匹配，请稍候..."):
                 try:
                     # 数据预处理
                     # 1. 确保订单号列为字符串格式
@@ -340,6 +437,8 @@ def main():
                                 f"- 汇总表订单号样本：{list(valid_summary_orders[:5]) if len(valid_summary_orders) > 0 else '无'}")
                             st.markdown(
                                 f"- 明细表订单号样本：{list(df_detail[df_detail[detail_col] != ''][detail_col].unique()[:5]) if len(df_detail) > 0 else '无'}")
+                            st.markdown(
+                                f"- 汇总表表头行：第 {summary_header_row + 1} 行 | 明细表表头行：第 {detail_header_row + 1} 行")
                     else:
                         st.success(f"✅ 匹配完成！共找到 **{len(matched_df)}** 条匹配记录")
 
@@ -383,11 +482,17 @@ def main():
                         st.download_button(
                             label="📦 下载完整匹配结果 (Excel)",
                             data=output,
-                            file_name=f"订单匹配结果_{timestamp}.xlsx",
+                            file_name=f"智能匹配结果_{timestamp}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             use_container_width=True
                         )
-                        st.info("💡 订单号列已设置为文本格式，避免科学计数法；内销文件合并单元格空值已填充")
+                        st.info(f"""
+                        💡 匹配结果说明：
+                        - 订单号列已设置为文本格式，避免科学计数法
+                        - 内销文件合并单元格空值已填充
+                        - 汇总表表头行：第 {summary_header_row + 1} 行
+                        - 明细表表头行：第 {detail_header_row + 1} 行
+                        """)
 
                 except Exception as e:
                     st.error(f"❌ 匹配过程出错：{str(e)}")
