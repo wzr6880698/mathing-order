@@ -85,14 +85,13 @@ def safe_order_str(x):
     if pd.isna(x):
         return ''
     if isinstance(x, (int, float)):
-        # 如果是浮点数且小数部分为0，转为整数格式字符串
         if x == int(x):
             s = str(int(x))
         else:
             s = str(x)
     else:
         s = str(x)
-    return s.strip()  # 去除首尾空格
+    return s.strip()
 
 
 def main():
@@ -118,12 +117,12 @@ def main():
         ✅ 自动识别订单号列  
         ✅ 支持手动选择列  
         ✅ 明细表智能清洗（填充合并单元格空白）  
-        ✅ 可下载清洗后明细表，便于核对  
+        ✅ 可下载清洗后明细表（订单号推荐列自动转文本）  
         ✅ 订单号自动转为文本格式，避免科学计数法，并去除空格  
         """)
         st.markdown("---")
         st.markdown("### 版本信息")
-        st.info("版本: v1.5.0（增加转换后预览，去除空格）")
+        st.info("版本: v1.6.0（清洗后下载订单号列转文本）")
 
     st.title("🔗 订单匹配工具")
     st.markdown("根据订单号匹配汇总表和明细表数据")
@@ -170,15 +169,25 @@ def main():
                 df_detail = clean_dataframe(df_detail)
                 st.success("✅ 明细表清洗完成（所有空白单元格已填充）")
 
-                # 预览清洗后的明细表（订单号可能仍显示科学计数，但数据本身未丢失）
+                # 预览清洗后的明细表（原始数据，可能显示科学计数）
                 with st.expander("👀 查看清洗后的明细表预览"):
                     st.dataframe(df_detail.head(20), use_container_width=True)
 
-                # 提供下载清洗后明细表（保持原始数据类型）
+                # 重新检测推荐列（基于清洗后数据）
+                detail_recommended, _ = detect_column(df_detail, "明细表")
+                if detail_recommended:
+                    st.info(f"🔍 检测到可能的订单号列：**{detail_recommended}**，下载时将自动转为文本格式。")
+
+                # 生成下载清洗后明细表（对推荐列应用 safe_order_str）
+                df_download = df_detail.copy()
+                if detail_recommended:
+                    df_download[detail_recommended] = df_download[detail_recommended].apply(safe_order_str)
+
                 output_detail = io.BytesIO()
                 with pd.ExcelWriter(output_detail, engine='xlsxwriter') as writer:
-                    df_detail.to_excel(writer, index=False, sheet_name='清洗后明细')
+                    df_download.to_excel(writer, index=False, sheet_name='清洗后明细')
                 output_detail.seek(0)
+
                 st.download_button(
                     label="📥 下载清洗后的明细表 (Excel)",
                     data=output_detail,
