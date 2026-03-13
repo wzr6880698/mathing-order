@@ -74,6 +74,25 @@ def clean_dataframe(df):
     return df.ffill()
 
 
+def safe_order_str(x):
+    """
+    将订单号值安全转换为字符串，避免科学计数法。
+    - NaN -> ''
+    - 整数或可转为整数的浮点数 -> 整数格式字符串 (如 1.0 -> "1")
+    - 其他数值 -> 直接转字符串 (保留小数)
+    - 其他 -> 直接转字符串
+    """
+    if pd.isna(x):
+        return ''
+    if isinstance(x, (int, float)):
+        # 如果是浮点数且小数部分为0，转为整数格式字符串
+        if x == int(x):
+            return str(int(x))
+        else:
+            return str(x)
+    return str(x)
+
+
 def main():
     st.set_page_config(
         page_title="订单匹配工具",
@@ -102,7 +121,7 @@ def main():
         """)
         st.markdown("---")
         st.markdown("### 版本信息")
-        st.info("版本: v1.3.0（新增清洗后明细下载）")
+        st.info("版本: v1.4.0（修复订单号科学计数问题）")
 
     st.title("🔗 订单匹配工具")
     st.markdown("根据订单号匹配汇总表和明细表数据")
@@ -149,11 +168,11 @@ def main():
                 df_detail = clean_dataframe(df_detail)
                 st.success("✅ 明细表清洗完成（所有空白单元格已填充）")
 
-                # 预览清洗后的明细表
+                # 预览清洗后的明细表（订单号可能仍显示科学计数，但数据本身未丢失）
                 with st.expander("👀 查看清洗后的明细表预览"):
                     st.dataframe(df_detail.head(20), use_container_width=True)
 
-                # 提供下载清洗后明细表
+                # 提供下载清洗后明细表（保持原始数据类型）
                 output_detail = io.BytesIO()
                 with pd.ExcelWriter(output_detail, engine='xlsxwriter') as writer:
                     df_detail.to_excel(writer, index=False, sheet_name='清洗后明细')
@@ -211,9 +230,9 @@ def main():
             else:
                 with st.spinner("正在匹配数据..."):
                     try:
-                        # 处理订单号列：NaN → 空字符串 → 字符串
-                        df_summary[summary_col] = df_summary[summary_col].fillna('').astype(str)
-                        df_detail[detail_col] = df_detail[detail_col].fillna('').astype(str)
+                        # 对订单号列进行安全转换（避免科学计数法）
+                        df_summary[summary_col] = df_summary[summary_col].apply(safe_order_str)
+                        df_detail[detail_col] = df_detail[detail_col].apply(safe_order_str)
 
                         # 汇总表有效订单集合（排除空字符串）
                         summary_orders = df_summary[summary_col][df_summary[summary_col] != ''].unique()
@@ -241,7 +260,7 @@ def main():
                             if len(matched) > 20:
                                 st.caption(f"仅显示前 20 条记录，共 {len(matched)} 条")
 
-                            # 生成下载文件
+                            # 生成下载文件，并对订单号列设置文本格式
                             output = io.BytesIO()
                             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                                 matched.to_excel(writer, index=False, sheet_name='匹配结果')
