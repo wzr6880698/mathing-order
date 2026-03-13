@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import streamlit as st
 import re
 import io
@@ -70,30 +71,27 @@ def detect_column(df, sheet_desc):
 
 
 def clean_dataframe(df):
-    """对所有列执行向前填充，填充合并单元格导致的空白"""
-    return df.ffill()
+    """
+    清洗DataFrame：先将所有列的空字符串替换为 NaN，
+    然后对所有列执行向前填充，最后将 NaN 替换回空字符串。
+    """
+    # 将空字符串替换为 NaN
+    df_clean = df.replace(r'^\s*$', np.nan, regex=True)
+    # 向前填充
+    df_clean = df_clean.ffill()
+    # 将 NaN 替换回空字符串
+    df_clean = df_clean.fillna('')
+    return df_clean
 
 
 def safe_order_str(x):
     """
-    将订单号值安全转换为字符串，避免科学计数法，并去除首尾空格及特殊空白字符。
-    - NaN -> ''
-    - 整数或可转为整数的浮点数 -> 整数格式字符串 (如 1.0 -> "1")
-    - 其他数值 -> 直接转字符串 (保留小数)
-    - 其他 -> 直接转字符串
-    最后执行 strip() 去除各类空白字符。
+    对订单号字符串进行简单清理：去除首尾空格。
+    由于数据已作为字符串读取，无需再处理科学计数法。
     """
     if pd.isna(x):
         return ''
-    if isinstance(x, (int, float)):
-        if x == int(x):
-            s = str(int(x))
-        else:
-            s = str(x)
-    else:
-        s = str(x)
-    # 去除各种空白字符，包括普通空格、\xa0等
-    return s.strip()
+    return str(x).strip()
 
 
 def main():
@@ -118,14 +116,13 @@ def main():
         ### 功能说明：
         ✅ 自动识别订单号列  
         ✅ 支持手动选择列  
-        ✅ 明细表智能清洗（填充合并单元格空白）  
-        ✅ 可下载清洗后明细表（订单号推荐列自动转文本）  
-        ✅ 订单号自动转为文本格式，避免科学计数法，并去除空格  
-        ✅ 清洗前后订单号对比功能  
+        ✅ 明细表智能清洗（填充合并单元格空白，保持订单号完整）  
+        ✅ 可下载清洗后明细表（订单号列自动转文本）  
+        ✅ 清洗前后订单号对比，便于核对  
         """)
         st.markdown("---")
         st.markdown("### 版本信息")
-        st.info("版本: v1.7.0（增强清洗对比与匹配调试）")
+        st.info("版本: v1.8.0（修复订单号精度丢失）")
 
     st.title("🔗 订单匹配工具")
     st.markdown("根据订单号匹配汇总表和明细表数据")
@@ -147,20 +144,22 @@ def main():
 
     df_summary = None
     df_detail = None
+    df_detail_raw = None  # 保存原始明细表，用于对比
     summary_col = None
     detail_col = None
 
     if summary_file:
         try:
-            df_summary = pd.read_excel(summary_file)
+            # 以字符串形式读取，避免长数字截断
+            df_summary = pd.read_excel(summary_file, dtype=str, keep_default_na=False)
             st.info(f"📊 汇总表: {len(df_summary)} 行, {len(df_summary.columns)} 列")
         except Exception as e:
             st.error(f"❌ 读取汇总表失败: {e}")
 
     if detail_file:
         try:
-            # 读取原始明细表，用于后续对比
-            df_detail_raw = pd.read_excel(detail_file)
+            # 保存原始数据（用于对比）
+            df_detail_raw = pd.read_excel(detail_file, dtype=str, keep_default_na=False)
             st.info(f"📋 明细表: {len(df_detail_raw)} 行, {len(df_detail_raw.columns)} 列")
 
             clean_option = st.checkbox(
@@ -173,28 +172,24 @@ def main():
                 df_detail = clean_dataframe(df_detail_raw)
                 st.success("✅ 明细表清洗完成（所有空白单元格已填充）")
 
-                # 检测推荐订单号列
-                detail_recommended, _ = detect_column(df_detail, "明细表")
+                # 清洗前后订单号列对比（如果检测到推荐列）
+                detail_recommended, _ = detect_column(df_detail_raw, "明细表原始")
                 if detail_recommended:
-                    st.info(f"🔍 检测到可能的订单号列：**{detail_recommended}**")
-
-                    # 提供清洗前后订单号对比
-                    with st.expander("🔎 查看清洗前后订单号列对比（前20行）"):
-                        # 获取原始列和清洗后列，都转换为字符串以便显示
-                        raw_vals = df_detail_raw[detail_recommended].astype(str).tolist()[:20]
-                        cleaned_vals = df_detail[detail_recommended].astype(str).tolist()[:20]
+                    with st.expander("🔍 清洗前后订单号列对比（前10行）"):
+                        raw_sample = df_detail_raw[detail_recommended].head(10).tolist()
+                        cleaned_sample = df_detail[detail_recommended].head(10).tolist()
                         compare_df = pd.DataFrame({
-                            "原始订单号（前20）": raw_vals,
-                            "清洗后订单号（前20）": cleaned_vals
+                            "清洗前订单号": raw_sample,
+                            "清洗后订单号": cleaned_sample,
+                            "是否一致": [r == c for r, c in zip(raw_sample, cleaned_sample)]
                         })
                         st.dataframe(compare_df, use_container_width=True)
-                        st.caption("注意：清洗后空值会被上一行填充，这是预期行为。")
 
-                # 预览清洗后的明细表（原始数据，可能显示科学计数）
-                with st.expander("👀 查看清洗后的明细表预览（所有列前20行）"):
+                # 预览清洗后的明细表
+                with st.expander("👀 查看清洗后的明细表预览"):
                     st.dataframe(df_detail.head(20), use_container_width=True)
 
-                # 生成下载清洗后明细表（对推荐列应用 safe_order_str）
+                # 生成下载清洗后明细表（对推荐列应用 safe_order_str 去除空格）
                 df_download = df_detail.copy()
                 if detail_recommended:
                     df_download[detail_recommended] = df_download[detail_recommended].apply(safe_order_str)
@@ -212,8 +207,7 @@ def main():
                     use_container_width=True
                 )
             else:
-                # 如果不清洗，直接使用原始数据
-                df_detail = df_detail_raw
+                df_detail = df_detail_raw  # 不清洗则使用原始数据
         except Exception as e:
             st.error(f"❌ 读取明细表失败: {e}")
 
@@ -260,12 +254,12 @@ def main():
             else:
                 with st.spinner("正在匹配数据..."):
                     try:
-                        # 对订单号列进行安全转换（避免科学计数法、去除各类空格）
+                        # 对订单号列进行简单清理（去除空格）
                         df_summary[summary_col] = df_summary[summary_col].apply(safe_order_str)
                         df_detail[detail_col] = df_detail[detail_col].apply(safe_order_str)
 
                         # 调试：显示转换后的订单号样例
-                        with st.expander("🔍 查看转换后的订单号样例（前10条）"):
+                        with st.expander("🔍 查看清理后的订单号样例（前10条）"):
                             st.write("汇总表订单号样例：", df_summary[summary_col].head(10).tolist())
                             st.write("明细表订单号样例：", df_detail[detail_col].head(10).tolist())
 
