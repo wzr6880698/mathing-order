@@ -31,7 +31,7 @@ def like_order_string(s):
 def detect_column(df, sheet_desc):
     """自动识别订单号列，返回(推荐列名, 排序后列名列表)"""
     keywords = [
-        "订单号", "订单编号", "订单", "编号",
+        "订单号", "订单编号", "订单", "编号","关联订单号","关联业务单号"
         "order number", "order no", "orderno", "order id",
         "order", "id"
     ]
@@ -71,10 +71,12 @@ def detect_column(df, sheet_desc):
 
 
 def is_amount_column(col_name):
-    """根据列名判断是否为金额类列（不进行填充）"""
+    """根据列名判断是否为金额类列（不进行填充，但导出时转为数值）"""
     amount_keywords = [
-        "总价", "金额", "单价", "运费", "改价", "实付款", "结算价",
-        "price", "amount", "freight", "payment", "settlement"
+        "总价", "金额", "单价","数量", "运费", "改价", "实付款", "结算价",
+        "货品总价", "数量(Quantity)", "单价(Unit Price)", "订单总价(Order Amount)",
+        "运费(Shipping Fee)", "预付款(Initial Payment)", "尾款(Balance Payment)",
+        "price", "amount", "freight", "payment", "settlement","Order Amount"
     ]
     col_lower = str(col_name).lower()
     for kw in amount_keywords:
@@ -100,12 +102,22 @@ def clean_dataframe(df):
 
 
 def safe_order_str(x):
-    """
-    对订单号字符串进行简单清理：去除首尾空格。
-    """
+    """对订单号字符串进行简单清理：去除首尾空格。"""
     if pd.isna(x):
         return ''
     return str(x).strip()
+
+
+def convert_amount_columns_to_numeric(df):
+    """
+    将DataFrame中的金额类列转换为数值类型（float），
+    无法转换的变为 NaN。
+    """
+    df_numeric = df.copy()
+    for col in df_numeric.columns:
+        if is_amount_column(col):
+            df_numeric[col] = pd.to_numeric(df_numeric[col], errors='coerce')
+    return df_numeric
 
 
 def main():
@@ -133,10 +145,11 @@ def main():
         ✅ 明细表智能清洗：仅对非金额列（如订单号）填充合并单元格空白，金额列保持原样  
         ✅ 可下载清洗后明细表（订单号列自动转文本）  
         ✅ 清洗前后订单号对比，便于核对  
+        ✅ 匹配结果中金额列自动转换为数值，无需手动修改格式  
         """)
         st.markdown("---")
         st.markdown("### 版本信息")
-        st.info("版本: v1.9.0（仅填充非金额列）")
+        st.info("版本: v1.10.0（金额列自动转数值）")
 
     st.title("🔗 订单匹配工具")
     st.markdown("根据订单号匹配汇总表和明细表数据")
@@ -288,6 +301,9 @@ def main():
                             st.warning("⚠️ 没有找到任何匹配的订单！")
                             st.info("💡 您可下载清洗后的明细表，并检查上方转换后的订单号样例，确认格式是否一致。")
                         else:
+                            # 将金额列转换为数值类型（便于后续计算和显示）
+                            matched = convert_amount_columns_to_numeric(matched)
+
                             st.success(f"✅ 匹配完成！找到 **{len(matched)}** 条匹配记录")
 
                             col1, col2, col3 = st.columns(3)
@@ -303,16 +319,18 @@ def main():
                             if len(matched) > 20:
                                 st.caption(f"仅显示前 20 条记录，共 {len(matched)} 条")
 
-                            # 生成下载文件，并对订单号列设置文本格式
+                            # 生成下载文件，并对订单号列设置文本格式，金额列自动为数值
                             output = io.BytesIO()
                             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                                 matched.to_excel(writer, index=False, sheet_name='匹配结果')
                                 workbook = writer.book
                                 worksheet = writer.sheets['匹配结果']
+                                # 将订单号列设为文本格式
                                 col_idx = matched.columns.get_loc(detail_col)
                                 col_letter = col_num_to_letter(col_idx)
                                 text_format = workbook.add_format({'num_format': '@'})
                                 worksheet.set_column(f'{col_letter}:{col_letter}', None, text_format)
+                                # 可选：将金额列设为数值格式（但默认就是数值，无需额外设置）
                             output.seek(0)
 
                             st.markdown("---")
@@ -325,7 +343,7 @@ def main():
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                 use_container_width=True
                             )
-                            st.info("💡 订单号列已设置为文本格式，不会显示为科学计数法。")
+                            st.info("💡 订单号列已设置为文本格式，金额列已自动转换为数值，无需手动修改。")
                     except Exception as e:
                         st.error(f"❌ 匹配过程中出现错误: {e}")
                         with st.expander("查看详细错误信息"):
