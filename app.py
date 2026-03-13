@@ -87,13 +87,10 @@ def detect_column(df, sheet_desc):
 
 def clean_dataframe(df):
     """
-    清洗DataFrame：对数据类型为object（文本）的列执行向前填充，
+    清洗DataFrame：对所有列执行向前填充（ffill），
     以填充因合并单元格导致的空白单元格。
     """
-    df_clean = df.copy()
-    for col in df_clean.select_dtypes(include=['object']).columns:
-        df_clean[col] = df_clean[col].ffill()
-    return df_clean
+    return df.ffill()
 
 
 def main():
@@ -132,14 +129,14 @@ def main():
 
         ✅ 自动识别订单号列
         ✅ 支持手动选择列
-        ✅ 明细表智能清洗（填充合并单元格空白）
-        ✅ 订单号自动转为文本格式
-        ✅ 防止科学计数法显示
+        ✅ 明细表智能清洗（填充所有合并单元格空白）
+        ✅ 订单号自动转为文本格式，避免科学计数法
+        ✅ 匹配结果中订单号无`nan`显示
         """)
 
         st.markdown("---")
         st.markdown("### 版本信息")
-        st.info("版本: v1.1.0（新增明细表清洗）")
+        st.info("版本: v1.2.0（全面清洗+数值列保留）")
 
     # 主界面
     st.title("🔗 订单匹配工具")
@@ -193,14 +190,14 @@ def main():
 
             # 明细表清洗选项
             clean_option = st.checkbox(
-                "🧹 清洗明细表（自动填充因合并单元格导致的空白，仅文本列）",
+                "🧹 清洗明细表（自动填充所有因合并单元格导致的空白）",
                 value=True,
                 key="clean_detail",
-                help="勾选后，将对所有文本列进行向下填充，以补全合并单元格造成的空白。"
+                help="勾选后，将对所有列进行向下填充，确保订单号、金额等信息完整。"
             )
             if clean_option:
                 df_detail = clean_dataframe(df_detail)
-                st.success("✅ 明细表清洗完成（文本列已填充）")
+                st.success("✅ 明细表清洗完成（所有空白单元格已填充）")
         except Exception as e:
             st.error(f"❌ 读取明细表失败: {e}")
 
@@ -255,14 +252,15 @@ def main():
             else:
                 with st.spinner("正在匹配数据..."):
                     try:
-                        # 将订单号列转换为字符串
-                        df_summary[summary_col] = df_summary[summary_col].astype(str)
-                        df_detail[detail_col] = df_detail[detail_col].astype(str)
+                        # 单独处理订单号列：将 NaN 替换为空字符串，再转为字符串（避免出现 "nan"）
+                        df_summary[summary_col] = df_summary[summary_col].fillna('').astype(str)
+                        df_detail[detail_col] = df_detail[detail_col].fillna('').astype(str)
 
-                        # 匹配逻辑
-                        summary_orders = df_summary[summary_col].dropna().unique()
+                        # 构建汇总表订单号集合（排除空字符串）
+                        summary_orders = df_summary[summary_col][df_summary[summary_col] != ''].unique()
                         order_set = set(summary_orders)
 
+                        # 匹配（明细表订单号在集合中）
                         matched = df_detail[df_detail[detail_col].isin(order_set)]
 
                         if matched.empty:
@@ -274,7 +272,7 @@ def main():
                             # 显示统计信息
                             col1, col2, col3 = st.columns(3)
                             with col1:
-                                st.metric("汇总表订单数", len(summary_orders))
+                                st.metric("汇总表订单数（非空）", len(summary_orders))
                             with col2:
                                 st.metric("明细表记录数", len(df_detail))
                             with col3:
@@ -299,7 +297,7 @@ def main():
                                 col_idx = matched.columns.get_loc(detail_col)
                                 col_letter = col_num_to_letter(col_idx)
 
-                                # 设置订单号列为文本格式
+                                # 设置订单号列为文本格式（避免科学计数法）
                                 text_format = workbook.add_format({'num_format': '@'})
                                 worksheet.set_column(f'{col_letter}:{col_letter}', None, text_format)
 
