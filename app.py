@@ -20,28 +20,21 @@ def like_order_string(s):
         return False
     if len(s) < 3 or len(s) > 50:
         return False
-    # 包含中文字符的通常不是订单号
     if re.search('[\u4e00-\u9fff]', s):
         return False
-    # 允许字母、数字、短横线、下划线、斜杠、点
     if re.match(r'^[A-Za-z0-9\-_/\.]+$', s):
         return True
     return False
 
 
 def detect_column(df, sheet_desc):
-    """
-    自动识别订单号列，结合列名关键词和列内数据特征。
-    返回 (推荐的列名, 所有列名按得分排序)
-    """
-    # 关键词列表
+    """自动识别订单号列，返回(推荐列名, 排序后列名列表)"""
     keywords = [
         "订单号", "订单编号", "订单", "编号",
         "order number", "order no", "orderno", "order id",
-        "order", "id", "编号"
+        "order", "id"
     ]
 
-    # 1. 关键词得分
     kw_scores = {}
     for col in df.columns:
         col_lower = str(col).lower()
@@ -51,7 +44,6 @@ def detect_column(df, sheet_desc):
                 score += 1
         kw_scores[col] = score
 
-    # 2. 内容特征得分
     content_scores = {}
     sample_size = min(100, len(df))
     sample = df.head(sample_size)
@@ -64,32 +56,21 @@ def detect_column(df, sheet_desc):
         like_count = sum(1 for v in values if like_order_string(v))
         content_scores[col] = like_count / non_null
 
-    # 3. 综合得分
     total_scores = {}
     for col in df.columns:
         kw = kw_scores[col]
         content = content_scores[col]
-        if kw > 0:
-            total = kw * 10 + content
-        else:
-            total = content
+        total = kw * 10 + content if kw > 0 else content
         total_scores[col] = total
 
-    # 4. 按得分排序
     sorted_columns = sorted(df.columns.tolist(), key=lambda c: total_scores[c], reverse=True)
-
-    # 找出最高分的列
     max_score = max(total_scores.values()) if total_scores else 0
     recommended = sorted_columns[0] if sorted_columns and max_score > 0 else None
-
     return recommended, sorted_columns
 
 
 def clean_dataframe(df):
-    """
-    清洗DataFrame：对所有列执行向前填充（ffill），
-    以填充因合并单元格导致的空白单元格。
-    """
+    """对所有列执行向前填充，填充合并单元格导致的空白"""
     return df.ffill()
 
 
@@ -101,80 +82,50 @@ def main():
         initial_sidebar_state="expanded"
     )
 
-    # 侧边栏说明
     with st.sidebar:
         st.header("📖 使用说明")
         st.markdown("""
         ### 操作步骤：
-
         1. **上传汇总表** 📊
-           - 包含订单汇总信息的Excel文件
-
         2. **上传明细表** 📋
-           - 包含订单明细信息的Excel文件
-
         3. **选择订单号列** 🏷️
-           - 系统会自动识别推荐
-           - 如不准确可手动选择
-
         4. **开始匹配** 🔗
-           - 点击按钮执行匹配
-
         5. **下载结果** ⬇️
-           - 下载匹配后的Excel文件
 
         ---
-
         ### 功能说明：
-
-        ✅ 自动识别订单号列
-        ✅ 支持手动选择列
-        ✅ 明细表智能清洗（填充所有合并单元格空白）
-        ✅ 订单号自动转为文本格式，避免科学计数法
-        ✅ 匹配结果中订单号无`nan`显示
+        ✅ 自动识别订单号列  
+        ✅ 支持手动选择列  
+        ✅ 明细表智能清洗（填充合并单元格空白）  
+        ✅ 可下载清洗后明细表，便于核对  
+        ✅ 订单号自动转为文本格式，避免科学计数法  
         """)
-
         st.markdown("---")
         st.markdown("### 版本信息")
-        st.info("版本: v1.2.0（全面清洗+数值列保留）")
+        st.info("版本: v1.3.0（新增清洗后明细下载）")
 
-    # 主界面
     st.title("🔗 订单匹配工具")
     st.markdown("根据订单号匹配汇总表和明细表数据")
     st.markdown("---")
 
-    # 创建两列布局
     col1, col2 = st.columns(2)
 
     with col1:
         st.subheader("📊 汇总表")
-        summary_file = st.file_uploader(
-            "上传汇总信息 Excel 文件",
-            type=['xlsx', 'xls'],
-            key="summary_file"
-        )
-
+        summary_file = st.file_uploader("上传汇总信息 Excel 文件", type=['xlsx', 'xls'], key="summary_file")
         if summary_file:
             st.success(f"✅ 已上传: {summary_file.name}")
 
     with col2:
         st.subheader("📋 明细表")
-        detail_file = st.file_uploader(
-            "上传明细信息 Excel 文件",
-            type=['xlsx', 'xls'],
-            key="detail_file"
-        )
-
+        detail_file = st.file_uploader("上传明细信息 Excel 文件", type=['xlsx', 'xls'], key="detail_file")
         if detail_file:
             st.success(f"✅ 已上传: {detail_file.name}")
 
-    # 读取数据
     df_summary = None
     df_detail = None
     summary_col = None
     detail_col = None
-    summary_columns = []
-    detail_columns = []
 
     if summary_file:
         try:
@@ -188,7 +139,6 @@ def main():
             df_detail = pd.read_excel(detail_file)
             st.info(f"📋 明细表: {len(df_detail)} 行, {len(df_detail.columns)} 列")
 
-            # 明细表清洗选项
             clean_option = st.checkbox(
                 "🧹 清洗明细表（自动填充所有因合并单元格导致的空白）",
                 value=True,
@@ -198,38 +148,49 @@ def main():
             if clean_option:
                 df_detail = clean_dataframe(df_detail)
                 st.success("✅ 明细表清洗完成（所有空白单元格已填充）")
+
+                # 预览清洗后的明细表
+                with st.expander("👀 查看清洗后的明细表预览"):
+                    st.dataframe(df_detail.head(20), use_container_width=True)
+
+                # 提供下载清洗后明细表
+                output_detail = io.BytesIO()
+                with pd.ExcelWriter(output_detail, engine='xlsxwriter') as writer:
+                    df_detail.to_excel(writer, index=False, sheet_name='清洗后明细')
+                output_detail.seek(0)
+                st.download_button(
+                    label="📥 下载清洗后的明细表 (Excel)",
+                    data=output_detail,
+                    file_name=f"清洗后明细表_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
         except Exception as e:
             st.error(f"❌ 读取明细表失败: {e}")
 
     st.markdown("---")
 
-    # 选择订单号列
     if df_summary is not None and df_detail is not None:
         st.subheader("🏷️ 选择订单号列")
 
-        # 自动识别
         summary_recommended, summary_sorted = detect_column(df_summary, "汇总表")
         detail_recommended, detail_sorted = detect_column(df_detail, "明细表")
 
         col1, col2 = st.columns(2)
-
         with col1:
             st.markdown("**汇总表订单号列：**")
             if summary_recommended:
                 st.caption(f"💡 推荐列: **{summary_recommended}**")
-
             summary_col = st.selectbox(
                 "选择汇总表中的订单号列",
                 options=summary_sorted,
                 index=0 if summary_sorted else None,
                 key="summary_col_select"
             )
-
         with col2:
             st.markdown("**明细表订单号列：**")
             if detail_recommended:
                 st.caption(f"💡 推荐列: **{detail_recommended}**")
-
             detail_col = st.selectbox(
                 "选择明细表中的订单号列",
                 options=detail_sorted,
@@ -239,37 +200,34 @@ def main():
 
         st.markdown("---")
 
-        # 确认信息
         if summary_col and detail_col:
             st.info(f"📌 将使用以下列进行匹配：\n\n"
                     f"- 汇总表：**{summary_col}**\n"
                     f"- 明细表：**{detail_col}**")
 
-        # 开始匹配按钮
         if st.button("🔗 开始匹配", type="primary", use_container_width=True):
             if not summary_col or not detail_col:
                 st.error("❌ 请先选择订单号列！")
             else:
                 with st.spinner("正在匹配数据..."):
                     try:
-                        # 单独处理订单号列：将 NaN 替换为空字符串，再转为字符串（避免出现 "nan"）
+                        # 处理订单号列：NaN → 空字符串 → 字符串
                         df_summary[summary_col] = df_summary[summary_col].fillna('').astype(str)
                         df_detail[detail_col] = df_detail[detail_col].fillna('').astype(str)
 
-                        # 构建汇总表订单号集合（排除空字符串）
+                        # 汇总表有效订单集合（排除空字符串）
                         summary_orders = df_summary[summary_col][df_summary[summary_col] != ''].unique()
                         order_set = set(summary_orders)
 
-                        # 匹配（明细表订单号在集合中）
+                        # 匹配
                         matched = df_detail[df_detail[detail_col].isin(order_set)]
 
                         if matched.empty:
                             st.warning("⚠️ 没有找到任何匹配的订单！")
+                            st.info("💡 您可下载清洗后的明细表，检查订单号列是否已正确填充，并与汇总表订单号核对。")
                         else:
-                            # 显示匹配结果
                             st.success(f"✅ 匹配完成！找到 **{len(matched)}** 条匹配记录")
 
-                            # 显示统计信息
                             col1, col2, col3 = st.columns(3)
                             with col1:
                                 st.metric("汇总表订单数（非空）", len(summary_orders))
@@ -278,10 +236,8 @@ def main():
                             with col3:
                                 st.metric("匹配记录数", len(matched))
 
-                            # 预览数据
                             st.subheader("📊 匹配结果预览")
                             st.dataframe(matched.head(20), use_container_width=True)
-
                             if len(matched) > 20:
                                 st.caption(f"仅显示前 20 条记录，共 {len(matched)} 条")
 
@@ -289,24 +245,16 @@ def main():
                             output = io.BytesIO()
                             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                                 matched.to_excel(writer, index=False, sheet_name='匹配结果')
-
                                 workbook = writer.book
                                 worksheet = writer.sheets['匹配结果']
-
-                                # 获取订单号列位置
                                 col_idx = matched.columns.get_loc(detail_col)
                                 col_letter = col_num_to_letter(col_idx)
-
-                                # 设置订单号列为文本格式（避免科学计数法）
                                 text_format = workbook.add_format({'num_format': '@'})
                                 worksheet.set_column(f'{col_letter}:{col_letter}', None, text_format)
-
                             output.seek(0)
 
-                            # 下载按钮
                             st.markdown("---")
                             st.subheader("📥 下载结果")
-
                             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                             st.download_button(
                                 label="📦 下载匹配结果 (Excel)",
@@ -315,9 +263,7 @@ def main():
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                 use_container_width=True
                             )
-
                             st.info("💡 订单号列已设置为文本格式，不会显示为科学计数法。")
-
                     except Exception as e:
                         st.error(f"❌ 匹配过程中出现错误: {e}")
                         with st.expander("查看详细错误信息"):
