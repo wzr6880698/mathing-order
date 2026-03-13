@@ -70,15 +70,30 @@ def detect_column(df, sheet_desc):
     return recommended, sorted_columns
 
 
+def is_amount_column(col_name):
+    """根据列名判断是否为金额类列（不进行填充）"""
+    amount_keywords = [
+        "总价", "金额", "单价", "运费", "改价", "实付款", "结算价",
+        "price", "amount", "freight", "payment", "settlement"
+    ]
+    col_lower = str(col_name).lower()
+    for kw in amount_keywords:
+        if kw.lower() in col_lower:
+            return True
+    return False
+
+
 def clean_dataframe(df):
     """
-    清洗DataFrame：先将所有列的空字符串替换为 NaN，
-    然后对所有列执行向前填充，最后将 NaN 替换回空字符串。
+    清洗DataFrame：对非金额类列进行向前填充，金额类列保持不变。
+    先将空字符串替换为 NaN，填充后再将 NaN 替换回空字符串。
     """
     # 将空字符串替换为 NaN
     df_clean = df.replace(r'^\s*$', np.nan, regex=True)
-    # 向前填充
-    df_clean = df_clean.ffill()
+    for col in df_clean.columns:
+        if not is_amount_column(col):
+            # 对非金额列进行填充
+            df_clean[col] = df_clean[col].ffill()
     # 将 NaN 替换回空字符串
     df_clean = df_clean.fillna('')
     return df_clean
@@ -87,7 +102,6 @@ def clean_dataframe(df):
 def safe_order_str(x):
     """
     对订单号字符串进行简单清理：去除首尾空格。
-    由于数据已作为字符串读取，无需再处理科学计数法。
     """
     if pd.isna(x):
         return ''
@@ -116,13 +130,13 @@ def main():
         ### 功能说明：
         ✅ 自动识别订单号列  
         ✅ 支持手动选择列  
-        ✅ 明细表智能清洗（填充合并单元格空白，保持订单号完整）  
+        ✅ 明细表智能清洗：仅对非金额列（如订单号）填充合并单元格空白，金额列保持原样  
         ✅ 可下载清洗后明细表（订单号列自动转文本）  
         ✅ 清洗前后订单号对比，便于核对  
         """)
         st.markdown("---")
         st.markdown("### 版本信息")
-        st.info("版本: v1.8.0（修复订单号精度丢失）")
+        st.info("版本: v1.9.0（仅填充非金额列）")
 
     st.title("🔗 订单匹配工具")
     st.markdown("根据订单号匹配汇总表和明细表数据")
@@ -163,14 +177,14 @@ def main():
             st.info(f"📋 明细表: {len(df_detail_raw)} 行, {len(df_detail_raw.columns)} 列")
 
             clean_option = st.checkbox(
-                "🧹 清洗明细表（自动填充所有因合并单元格导致的空白）",
+                "🧹 清洗明细表（仅对非金额列填充合并单元格空白，金额列保持不变）",
                 value=True,
                 key="clean_detail",
-                help="勾选后，将对所有列进行向下填充，确保订单号、金额等信息完整。"
+                help="勾选后，将对非金额列（如订单号）进行向下填充，金额列（如总价、实付款）保持原样。"
             )
             if clean_option:
                 df_detail = clean_dataframe(df_detail_raw)
-                st.success("✅ 明细表清洗完成（所有空白单元格已填充）")
+                st.success("✅ 明细表清洗完成（非金额列已填充）")
 
                 # 清洗前后订单号列对比（如果检测到推荐列）
                 detail_recommended, _ = detect_column(df_detail_raw, "明细表原始")
