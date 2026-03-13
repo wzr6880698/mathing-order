@@ -76,7 +76,7 @@ def clean_dataframe(df):
 
 def safe_order_str(x):
     """
-    将订单号值安全转换为字符串，避免科学计数法。
+    将订单号值安全转换为字符串，避免科学计数法，并去除首尾空格。
     - NaN -> ''
     - 整数或可转为整数的浮点数 -> 整数格式字符串 (如 1.0 -> "1")
     - 其他数值 -> 直接转字符串 (保留小数)
@@ -87,10 +87,12 @@ def safe_order_str(x):
     if isinstance(x, (int, float)):
         # 如果是浮点数且小数部分为0，转为整数格式字符串
         if x == int(x):
-            return str(int(x))
+            s = str(int(x))
         else:
-            return str(x)
-    return str(x)
+            s = str(x)
+    else:
+        s = str(x)
+    return s.strip()  # 去除首尾空格
 
 
 def main():
@@ -117,11 +119,11 @@ def main():
         ✅ 支持手动选择列  
         ✅ 明细表智能清洗（填充合并单元格空白）  
         ✅ 可下载清洗后明细表，便于核对  
-        ✅ 订单号自动转为文本格式，避免科学计数法  
+        ✅ 订单号自动转为文本格式，避免科学计数法，并去除空格  
         """)
         st.markdown("---")
         st.markdown("### 版本信息")
-        st.info("版本: v1.4.0（修复订单号科学计数问题）")
+        st.info("版本: v1.5.0（增加转换后预览，去除空格）")
 
     st.title("🔗 订单匹配工具")
     st.markdown("根据订单号匹配汇总表和明细表数据")
@@ -230,9 +232,14 @@ def main():
             else:
                 with st.spinner("正在匹配数据..."):
                     try:
-                        # 对订单号列进行安全转换（避免科学计数法）
+                        # 对订单号列进行安全转换（避免科学计数法、去除空格）
                         df_summary[summary_col] = df_summary[summary_col].apply(safe_order_str)
                         df_detail[detail_col] = df_detail[detail_col].apply(safe_order_str)
+
+                        # 调试：显示转换后的订单号样例
+                        with st.expander("🔍 查看转换后的订单号样例（前10条）"):
+                            st.write("汇总表订单号样例：", df_summary[summary_col].head(10).tolist())
+                            st.write("明细表订单号样例：", df_detail[detail_col].head(10).tolist())
 
                         # 汇总表有效订单集合（排除空字符串）
                         summary_orders = df_summary[summary_col][df_summary[summary_col] != ''].unique()
@@ -243,7 +250,7 @@ def main():
 
                         if matched.empty:
                             st.warning("⚠️ 没有找到任何匹配的订单！")
-                            st.info("💡 您可下载清洗后的明细表，检查订单号列是否已正确填充，并与汇总表订单号核对。")
+                            st.info("💡 您可下载清洗后的明细表，并检查上方转换后的订单号样例，确认格式是否一致。")
                         else:
                             st.success(f"✅ 匹配完成！找到 **{len(matched)}** 条匹配记录")
 
