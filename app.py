@@ -29,13 +29,29 @@ def like_order_string(s):
 
 
 def detect_column(df, sheet_desc):
-    """自动识别订单号列，返回(推荐列名, 排序后列名列表)"""
+    """
+    自动识别订单号列，结合列名关键词和列内数据特征。
+    返回 (推荐的列名, 所有列名按得分排序)
+    若列名为空，则用占位符替换。
+    """
+    # 先处理空列名
+    cleaned_columns = []
+    for i, col in enumerate(df.columns):
+        if pd.isna(col) or str(col).strip() == '':
+            cleaned_columns.append(f"列{i+1}")
+        else:
+            cleaned_columns.append(str(col))
+    # 重新设置列名
+    df.columns = cleaned_columns
+
+    # 关键词列表
     keywords = [
-        "订单号", "订单编号", "订单", "编号","关联订单号","关联业务单号"
+        "订单号", "订单编号", "订单", "编号",
         "order number", "order no", "orderno", "order id",
         "order", "id"
     ]
 
+    # 1. 关键词得分
     kw_scores = {}
     for col in df.columns:
         col_lower = str(col).lower()
@@ -45,6 +61,7 @@ def detect_column(df, sheet_desc):
                 score += 1
         kw_scores[col] = score
 
+    # 2. 内容特征得分
     content_scores = {}
     sample_size = min(100, len(df))
     sample = df.head(sample_size)
@@ -57,26 +74,32 @@ def detect_column(df, sheet_desc):
         like_count = sum(1 for v in values if like_order_string(v))
         content_scores[col] = like_count / non_null
 
+    # 3. 综合得分
     total_scores = {}
     for col in df.columns:
         kw = kw_scores[col]
         content = content_scores[col]
-        total = kw * 10 + content if kw > 0 else content
+        if kw > 0:
+            total = kw * 10 + content
+        else:
+            total = content
         total_scores[col] = total
 
+    # 4. 按得分排序
     sorted_columns = sorted(df.columns.tolist(), key=lambda c: total_scores[c], reverse=True)
+
+    # 找出最高分的列
     max_score = max(total_scores.values()) if total_scores else 0
     recommended = sorted_columns[0] if sorted_columns and max_score > 0 else None
+
     return recommended, sorted_columns
 
 
 def is_amount_column(col_name):
     """根据列名判断是否为金额类列（不进行填充，但导出时转为数值）"""
     amount_keywords = [
-        "总价", "金额", "单价","数量", "运费", "改价", "实付款", "结算价",
-        "货品总价", "数量(Quantity)", "单价(Unit Price)", "订单总价(Order Amount)",
-        "运费(Shipping Fee)", "预付款(Initial Payment)", "尾款(Balance Payment)",
-        "price", "amount", "freight", "payment", "settlement","Order Amount"
+        "总价", "金额", "单价", "运费", "改价", "实付款", "结算价",
+        "price", "amount", "freight", "payment", "settlement"
     ]
     col_lower = str(col_name).lower()
     for kw in amount_keywords:
@@ -146,10 +169,11 @@ def main():
         ✅ 可下载清洗后明细表（订单号列自动转文本）  
         ✅ 清洗前后订单号对比，便于核对  
         ✅ 匹配结果中金额列自动转换为数值，无需手动修改格式  
+        ✅ 汇总表/明细表数据预览，直观选择列  
         """)
         st.markdown("---")
         st.markdown("### 版本信息")
-        st.info("版本: v1.10.0（金额列自动转数值）")
+        st.info("版本: v1.11.0（优化列选择，处理空列名）")
 
     st.title("🔗 订单匹配工具")
     st.markdown("根据订单号匹配汇总表和明细表数据")
@@ -180,6 +204,12 @@ def main():
             # 以字符串形式读取，避免长数字截断
             df_summary = pd.read_excel(summary_file, dtype=str, keep_default_na=False)
             st.info(f"📊 汇总表: {len(df_summary)} 行, {len(df_summary.columns)} 列")
+
+            # 汇总表数据预览
+            with st.expander("👀 查看汇总表数据预览"):
+                st.dataframe(df_summary.head(20), use_container_width=True)
+                if len(df_summary) > 20:
+                    st.caption(f"仅显示前 20 行，共 {len(df_summary)} 行")
         except Exception as e:
             st.error(f"❌ 读取汇总表失败: {e}")
 
@@ -188,6 +218,12 @@ def main():
             # 保存原始数据（用于对比）
             df_detail_raw = pd.read_excel(detail_file, dtype=str, keep_default_na=False)
             st.info(f"📋 明细表: {len(df_detail_raw)} 行, {len(df_detail_raw.columns)} 列")
+
+            # 明细表原始数据预览
+            with st.expander("👀 查看明细表原始数据预览"):
+                st.dataframe(df_detail_raw.head(20), use_container_width=True)
+                if len(df_detail_raw) > 20:
+                    st.caption(f"仅显示前 20 行，共 {len(df_detail_raw)} 行")
 
             clean_option = st.checkbox(
                 "🧹 清洗明细表（仅对非金额列填充合并单元格空白，金额列保持不变）",
@@ -243,6 +279,7 @@ def main():
     if df_summary is not None and df_detail is not None:
         st.subheader("🏷️ 选择订单号列")
 
+        # 检测列（同时会处理空列名）
         summary_recommended, summary_sorted = detect_column(df_summary, "汇总表")
         detail_recommended, detail_sorted = detect_column(df_detail, "明细表")
 
@@ -254,7 +291,7 @@ def main():
             summary_col = st.selectbox(
                 "选择汇总表中的订单号列",
                 options=summary_sorted,
-                index=0 if summary_sorted else None,
+                index=summary_sorted.index(summary_recommended) if summary_recommended in summary_sorted else 0,
                 key="summary_col_select"
             )
         with col2:
@@ -264,7 +301,7 @@ def main():
             detail_col = st.selectbox(
                 "选择明细表中的订单号列",
                 options=detail_sorted,
-                index=0 if detail_sorted else None,
+                index=detail_sorted.index(detail_recommended) if detail_recommended in detail_sorted else 0,
                 key="detail_col_select"
             )
 
