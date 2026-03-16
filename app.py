@@ -96,10 +96,16 @@ def detect_column(df, sheet_desc):
 
 
 def is_amount_column(col_name):
-    """根据列名判断是否为金额类列（不进行填充，但导出时转为数值）"""
+    """
+    根据列名判断是否为金额类列（不进行填充，但导出时转为数值）。
+    已扩展关键词，支持外销常见的英文列名。
+    """
     amount_keywords = [
         "总价", "金额", "单价", "运费", "改价", "实付款", "结算价",
-        "price", "amount", "freight", "payment", "settlement"
+        "price", "amount", "freight", "payment", "settlement",
+        # 新增外销关键词
+        "order amount", "shipping fee", "discount amount", "unit price",
+        "total amount", "fee", "discount", "shipping"
     ]
     col_lower = str(col_name).lower()
     for kw in amount_keywords:
@@ -173,7 +179,7 @@ def main():
         """)
         st.markdown("---")
         st.markdown("### 版本信息")
-        st.info("版本: v1.11.0（优化列选择，处理空列名）")
+        st.info("版本: v1.11.1（扩展金额关键词，兼容外销）")
 
     st.title("🔗 订单匹配工具")
     st.markdown("根据订单号匹配汇总表和明细表数据")
