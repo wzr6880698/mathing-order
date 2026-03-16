@@ -32,26 +32,14 @@ def detect_column(df, sheet_desc):
     """
     自动识别订单号列，结合列名关键词和列内数据特征。
     返回 (推荐的列名, 所有列名按得分排序)
-    若列名为空，则用占位符替换。
+    假设 df 的列名已经过标准化（无空格）。
     """
-    # 先处理空列名
-    cleaned_columns = []
-    for i, col in enumerate(df.columns):
-        if pd.isna(col) or str(col).strip() == '':
-            cleaned_columns.append(f"列{i+1}")
-        else:
-            cleaned_columns.append(str(col))
-    # 重新设置列名
-    df.columns = cleaned_columns
-
-    # 关键词列表
     keywords = [
         "订单号", "订单编号", "订单", "编号",
         "order number", "order no", "orderno", "order id",
         "order", "id"
     ]
 
-    # 1. 关键词得分
     kw_scores = {}
     for col in df.columns:
         col_lower = str(col).lower()
@@ -61,7 +49,6 @@ def detect_column(df, sheet_desc):
                 score += 1
         kw_scores[col] = score
 
-    # 2. 内容特征得分
     content_scores = {}
     sample_size = min(100, len(df))
     sample = df.head(sample_size)
@@ -74,7 +61,6 @@ def detect_column(df, sheet_desc):
         like_count = sum(1 for v in values if like_order_string(v))
         content_scores[col] = like_count / non_null
 
-    # 3. 综合得分
     total_scores = {}
     for col in df.columns:
         kw = kw_scores[col]
@@ -85,31 +71,27 @@ def detect_column(df, sheet_desc):
             total = content
         total_scores[col] = total
 
-    # 4. 按得分排序
     sorted_columns = sorted(df.columns.tolist(), key=lambda c: total_scores[c], reverse=True)
-
-    # 找出最高分的列
     max_score = max(total_scores.values()) if total_scores else 0
     recommended = sorted_columns[0] if sorted_columns and max_score > 0 else None
-
     return recommended, sorted_columns
 
 
 def clean_dataframe(df, exclude_columns=None):
     """
     清洗DataFrame：对非排除列进行向前填充，排除列保持原始值不变。
-    排除列通常为金额、数量列。
     """
     if exclude_columns is None:
         exclude_columns = []
     df_clean = df.copy()
+    # 调试信息：在界面显示排除列
+    st.write("清洗函数收到的排除列列表:", exclude_columns)
     for col in df_clean.columns:
         if col not in exclude_columns:
             # 对非排除列：将空字符串转为 NaN，向前填充，再将 NaN 转回空字符串
             df_clean[col] = df_clean[col].replace(r'^\s*$', np.nan, regex=True)
             df_clean[col] = df_clean[col].ffill()
             df_clean[col] = df_clean[col].fillna('')
-    # 排除列完全保持原样，不做任何处理
     return df_clean
 
 
@@ -125,13 +107,11 @@ def is_numeric_column(col_name):
     判断某列是否应该转换为数值类型（金额、数量等）。
     """
     numeric_keywords = [
-        # 金额相关
         "总价", "金额", "单价", "运费", "改价", "实付款", "结算价",
         "price", "amount", "freight", "payment", "settlement",
         "order amount", "shipping fee", "discount amount", "unit price",
         "total amount", "fee", "discount", "shipping",
         "initial payment", "balance payment", "tax",
-        # 数量相关
         "数量", "quantity", "qty"
     ]
     col_lower = str(col_name).lower()
@@ -183,7 +163,7 @@ def main():
         """)
         st.markdown("---")
         st.markdown("### 版本信息")
-        st.info("版本: v1.15.0（排除列完全保留原始值，多行验证）")
+        st.info("版本: v1.16.0（修复列名匹配问题）")
 
     st.title("🔗 订单匹配工具")
     st.markdown("根据订单号匹配汇总表和明细表数据")
@@ -205,17 +185,16 @@ def main():
 
     df_summary = None
     df_detail = None
-    df_detail_raw = None  # 保存原始明细表，用于对比
+    df_detail_raw = None
     summary_col = None
     detail_col = None
 
     if summary_file:
         try:
-            # 以字符串形式读取，避免长数字截断
             df_summary = pd.read_excel(summary_file, dtype=str, keep_default_na=False)
+            # 标准化列名：去除首尾空格
+            df_summary.columns = [str(col).strip() for col in df_summary.columns]
             st.info(f"📊 汇总表: {len(df_summary)} 行, {len(df_summary.columns)} 列")
-
-            # 汇总表数据预览
             with st.expander("👀 查看汇总表数据预览"):
                 st.dataframe(df_summary.head(20), use_container_width=True)
                 if len(df_summary) > 20:
@@ -225,11 +204,10 @@ def main():
 
     if detail_file:
         try:
-            # 保存原始数据（用于对比）
             df_detail_raw = pd.read_excel(detail_file, dtype=str, keep_default_na=False)
+            # 标准化列名：去除首尾空格
+            df_detail_raw.columns = [str(col).strip() for col in df_detail_raw.columns]
             st.info(f"📋 明细表: {len(df_detail_raw)} 行, {len(df_detail_raw.columns)} 列")
-
-            # 明细表原始数据预览
             with st.expander("👀 查看明细表原始数据预览"):
                 st.dataframe(df_detail_raw.head(20), use_container_width=True)
                 if len(df_detail_raw) > 20:
@@ -244,7 +222,6 @@ def main():
 
             exclude_columns = []
             if clean_option:
-                # 自动识别可能的金额列作为默认不填充列（基于关键词）
                 default_exclude = [col for col in df_detail_raw.columns if is_numeric_column(col)]
                 with st.expander("⚙️ 高级设置：选择不进行填充的列（通常为金额、数量列）", expanded=True):
                     st.markdown("以下列将被排除在填充之外，保持原样。您可手动调整。")
@@ -256,11 +233,10 @@ def main():
                     )
                     st.caption(f"当前选择的排除列: {exclude_columns}")
 
-                # 执行清洗
                 df_detail = clean_dataframe(df_detail_raw, exclude_columns)
                 st.success("✅ 明细表清洗完成（指定列未填充）")
 
-                # 验证排除列是否真的未填充（多行对比）
+                # 验证排除列
                 if exclude_columns:
                     with st.expander("🔍 验证排除列是否未填充（前5行对比）"):
                         for col in exclude_columns:
@@ -277,7 +253,7 @@ def main():
                 else:
                     st.info("未选择任何排除列，所有列都会被填充。")
 
-                # 清洗前后订单号列对比（如果检测到推荐列）
+                # 订单号列对比
                 detail_recommended, _ = detect_column(df_detail_raw, "明细表原始")
                 if detail_recommended:
                     with st.expander("🔍 清洗前后订单号列对比（前10行）"):
@@ -290,11 +266,10 @@ def main():
                         })
                         st.dataframe(compare_df, use_container_width=True)
 
-                # 预览清洗后的明细表
                 with st.expander("👀 查看清洗后的明细表预览"):
                     st.dataframe(df_detail.head(20), use_container_width=True)
 
-                # 生成下载清洗后明细表（对推荐列应用 safe_order_str 去除空格）
+                # 下载清洗后明细表
                 df_download = df_detail.copy()
                 if detail_recommended:
                     df_download[detail_recommended] = df_download[detail_recommended].apply(safe_order_str)
@@ -312,7 +287,7 @@ def main():
                     use_container_width=True
                 )
             else:
-                df_detail = df_detail_raw  # 不清洗则使用原始数据
+                df_detail = df_detail_raw
         except Exception as e:
             st.error(f"❌ 读取明细表失败: {e}")
 
@@ -321,7 +296,6 @@ def main():
     if df_summary is not None and df_detail is not None:
         st.subheader("🏷️ 选择订单号列")
 
-        # 检测列（同时会处理空列名）
         summary_recommended, summary_sorted = detect_column(df_summary, "汇总表")
         detail_recommended, detail_sorted = detect_column(df_detail, "明细表")
 
@@ -360,27 +334,22 @@ def main():
             else:
                 with st.spinner("正在匹配数据..."):
                     try:
-                        # 对订单号列进行简单清理（去除空格）
                         df_summary[summary_col] = df_summary[summary_col].apply(safe_order_str)
                         df_detail[detail_col] = df_detail[detail_col].apply(safe_order_str)
 
-                        # 调试：显示转换后的订单号样例
                         with st.expander("🔍 查看清理后的订单号样例（前10条）"):
                             st.write("汇总表订单号样例：", df_summary[summary_col].head(10).tolist())
                             st.write("明细表订单号样例：", df_detail[detail_col].head(10).tolist())
 
-                        # 汇总表有效订单集合（排除空字符串）
                         summary_orders = df_summary[summary_col][df_summary[summary_col] != ''].unique()
                         order_set = set(summary_orders)
 
-                        # 匹配
                         matched = df_detail[df_detail[detail_col].isin(order_set)]
 
                         if matched.empty:
                             st.warning("⚠️ 没有找到任何匹配的订单！")
                             st.info("💡 您可下载清洗后的明细表，并检查上方转换后的订单号样例，确认格式是否一致。")
                         else:
-                            # 将数值列（金额、数量等）转换为数值类型
                             matched = convert_numeric_columns(matched)
 
                             st.success(f"✅ 匹配完成！找到 **{len(matched)}** 条匹配记录")
@@ -398,13 +367,11 @@ def main():
                             if len(matched) > 20:
                                 st.caption(f"仅显示前 20 条记录，共 {len(matched)} 条")
 
-                            # 生成下载文件，并对订单号列设置文本格式
                             output = io.BytesIO()
                             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                                 matched.to_excel(writer, index=False, sheet_name='匹配结果')
                                 workbook = writer.book
                                 worksheet = writer.sheets['匹配结果']
-                                # 将订单号列设为文本格式
                                 col_idx = matched.columns.get_loc(detail_col)
                                 col_letter = col_num_to_letter(col_idx)
                                 text_format = workbook.add_format({'num_format': '@'})
