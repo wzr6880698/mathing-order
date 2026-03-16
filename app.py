@@ -105,6 +105,7 @@ def safe_order_str(x):
 def is_numeric_column(col_name):
     """
     判断某列是否应该转换为数值类型（金额、数量等）。
+    关键词已扩展，覆盖常见中英文金额列名。
     """
     numeric_keywords = [
         "总价", "金额", "单价", "运费", "改价", "实付款", "结算价",
@@ -112,7 +113,9 @@ def is_numeric_column(col_name):
         "order amount", "shipping fee", "discount amount", "unit price",
         "total amount", "fee", "discount", "shipping",
         "initial payment", "balance payment", "tax",
-        "数量", "quantity", "qty"
+        "数量", "quantity", "qty",
+        # 增加外销常见变体
+        "货品总价", "order total", "total price", "product amount"
     ]
     col_lower = str(col_name).lower()
     for kw in numeric_keywords:
@@ -163,7 +166,7 @@ def main():
         """)
         st.markdown("---")
         st.markdown("### 版本信息")
-        st.info("版本: v1.18.0（增强排除列调试）")
+        st.info("版本: v1.19.0（全面金额列验证）")
 
     st.title("🔗 订单匹配工具")
     st.markdown("根据订单号匹配汇总表和明细表数据")
@@ -222,6 +225,7 @@ def main():
 
             exclude_columns = []
             if clean_option:
+                # 自动识别可能的金额列作为默认不填充列
                 default_exclude = [col for col in df_detail_raw.columns if is_numeric_column(col)]
                 with st.expander("⚙️ 高级设置：选择不进行填充的列（通常为金额、数量列）", expanded=True):
                     st.markdown("以下列将被排除在填充之外，保持原样。您可手动调整。")
@@ -236,14 +240,14 @@ def main():
                 df_detail = clean_dataframe(df_detail_raw, exclude_columns)
                 st.success("✅ 明细表清洗完成（指定列未填充）")
 
-                # 验证排除列是否真的未填充（多行对比，并用 repr 显示精确值）
-                if exclude_columns:
-                    with st.expander("🔍 验证排除列是否未填充（前5行对比）"):
-                        for col in exclude_columns:
-                            st.markdown(f"**{col}**")
+                # 验证所有金额相关列（无论是否排除）的前5行对比
+                with st.expander("🔍 金额列清洗前后对比（前5行）"):
+                    amount_cols = [col for col in df_detail_raw.columns if is_numeric_column(col)]
+                    if amount_cols:
+                        for col in amount_cols:
+                            st.markdown(f"**{col}** (排除状态: {'✅ 是' if col in exclude_columns else '❌ 否'})")
                             raw_vals = df_detail_raw[col].head(5).tolist()
                             cleaned_vals = df_detail[col].head(5).tolist()
-                            # 用 repr 显示空字符串
                             raw_vals_repr = [repr(v) for v in raw_vals]
                             cleaned_vals_repr = [repr(v) for v in cleaned_vals]
                             changed = any(r != c for r, c in zip(raw_vals, cleaned_vals))
@@ -255,11 +259,17 @@ def main():
                             })
                             st.dataframe(compare_df, use_container_width=True)
                             if changed:
-                                st.error(f"❌ 列 '{col}' 的值发生了变化！请检查是否应该被排除，或列名是否完全匹配（含括号、空格）。")
+                                if col in exclude_columns:
+                                    st.error(f"❌ 列 '{col}' 虽被排除，但值发生了变化！请检查代码。")
+                                else:
+                                    st.warning(f"⚠️ 列 '{col}' 未被排除，值已变化（符合预期）。")
                             else:
-                                st.success(f"✅ 列 '{col}' 所有值未变化。")
-                else:
-                    st.info("未选择任何排除列，所有列都会被填充。")
+                                if col in exclude_columns:
+                                    st.success(f"✅ 列 '{col}' 被排除，值未变化。")
+                                else:
+                                    st.info(f"ℹ️ 列 '{col}' 未被排除，但值未变化（可能没有需要填充的空白）。")
+                    else:
+                        st.info("未检测到金额列。")
 
                 # 订单号列对比
                 detail_recommended, _ = detect_column(df_detail_raw, "明细表原始")
