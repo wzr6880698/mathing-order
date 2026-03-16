@@ -83,9 +83,9 @@ def clean_dataframe(df, exclude_columns=None):
     """
     if exclude_columns is None:
         exclude_columns = []
+    # 用 repr 打印排除列列表，以便查看精确字符串（含空格、括号等）
+    st.code(f"清洗函数收到的排除列列表 (repr): {repr(exclude_columns)}")
     df_clean = df.copy()
-    # 调试信息：在界面显示排除列
-    st.write("清洗函数收到的排除列列表:", exclude_columns)
     for col in df_clean.columns:
         if col not in exclude_columns:
             # 对非排除列：将空字符串转为 NaN，向前填充，再将 NaN 转回空字符串
@@ -163,7 +163,7 @@ def main():
         """)
         st.markdown("---")
         st.markdown("### 版本信息")
-        st.info("版本: v1.17.0（增强排除列验证）")
+        st.info("版本: v1.18.0（增强排除列调试）")
 
     st.title("🔗 订单匹配工具")
     st.markdown("根据订单号匹配汇总表和明细表数据")
@@ -236,18 +236,21 @@ def main():
                 df_detail = clean_dataframe(df_detail_raw, exclude_columns)
                 st.success("✅ 明细表清洗完成（指定列未填充）")
 
-                # 验证排除列是否真的未填充（多行对比，并标记变化）
+                # 验证排除列是否真的未填充（多行对比，并用 repr 显示精确值）
                 if exclude_columns:
                     with st.expander("🔍 验证排除列是否未填充（前5行对比）"):
                         for col in exclude_columns:
                             st.markdown(f"**{col}**")
                             raw_vals = df_detail_raw[col].head(5).tolist()
                             cleaned_vals = df_detail[col].head(5).tolist()
+                            # 用 repr 显示空字符串
+                            raw_vals_repr = [repr(v) for v in raw_vals]
+                            cleaned_vals_repr = [repr(v) for v in cleaned_vals]
                             changed = any(r != c for r, c in zip(raw_vals, cleaned_vals))
                             compare_df = pd.DataFrame({
                                 "行号": [f"第{i+1}行" for i in range(5)],
-                                "原始值": raw_vals,
-                                "清洗后值": cleaned_vals,
+                                "原始值 (repr)": raw_vals_repr,
+                                "清洗后值 (repr)": cleaned_vals_repr,
                                 "是否一致": [r == c for r, c in zip(raw_vals, cleaned_vals)]
                             })
                             st.dataframe(compare_df, use_container_width=True)
