@@ -104,8 +104,8 @@ def is_amount_column(col_name):
         "总价", "金额", "单价", "运费", "改价", "实付款", "结算价",
         "price", "amount", "freight", "payment", "settlement",
         # 新增外销关键词
-        "order amount", "shipping fee", "discount amount", "unit price",
-        "total amount", "fee", "discount", "shipping"
+        "order amount","(Order Amount)", "shipping fee", "discount amount", "unit price",
+        "total amount", "fee", "discount", "shipping","订单总价(Order Amount)"
     ]
     col_lower = str(col_name).lower()
     for kw in amount_keywords:
