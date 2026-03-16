@@ -188,7 +188,7 @@ def main():
         """)
         st.markdown("---")
         st.markdown("### 版本信息")
-        st.info("版本: v2.2.0（支持还原合并单元格效果）")
+        st.info("版本: v2.3.0（手动选择需还原的列）")
 
     st.title("🔗 订单匹配工具")
     st.markdown("根据订单号匹配汇总表和明细表数据")
@@ -266,18 +266,22 @@ def main():
                 df_detail = clean_dataframe(df_detail_raw, exclude_columns)
                 st.success("✅ 明细表清洗完成（指定列未填充）")
 
-                # 新增选项：还原合并单元格效果（仅对排除列生效）
-                revert_merge = st.checkbox(
-                    "🔄 还原合并单元格效果（仅保留每块第一行，适用于金额列）",
-                    value=False,
-                    key="revert_merge",
-                    help="勾选后，对排除列中连续相同的非空值，只保留第一行，其余清空。请谨慎使用，仅当确认这些值是由合并单元格产生时勾选。"
-                )
-
-                if revert_merge and exclude_columns:
-                    for col in exclude_columns:
-                        df_detail[col] = revert_merge_column(df_detail[col])
-                    st.success("✅ 已对排除列应用还原合并单元格效果。")
+                # 新增：选择需要还原合并单元格效果的列（仅从排除列中选）
+                if exclude_columns:
+                    with st.expander("🔄 还原合并单元格效果设置", expanded=True):
+                        st.markdown("对于因合并单元格而重复的列，可选择只保留每块第一行，其余清空。")
+                        revert_cols = st.multiselect(
+                            "需要还原的列（仅从上方排除列中选取）",
+                            options=exclude_columns,
+                            default=[],  # 默认不选任何列，由用户手动勾选
+                            key="revert_cols"
+                        )
+                        if revert_cols:
+                            for col in revert_cols:
+                                df_detail[col] = revert_merge_column(df_detail[col])
+                            st.success(f"✅ 已对以下列应用还原合并单元格效果：{revert_cols}")
+                else:
+                    st.info("当前无排除列，无法还原合并单元格。")
 
                 # 验证金额列（显示排除状态和对比）
                 with st.expander("🔍 金额列清洗前后对比（前5行）"):
