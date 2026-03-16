@@ -103,7 +103,7 @@ def safe_order_str(x):
 def is_numeric_column(col_name):
     """
     判断某列是否应该转换为数值类型（金额、数量等）。
-    关键词已全面覆盖中英文常见表达。
+    关键词已全面覆盖中英文常见表达，包括混合列名。
     """
     numeric_keywords = [
         # 中文金额相关
@@ -166,7 +166,7 @@ def main():
         """)
         st.markdown("---")
         st.markdown("### 版本信息")
-        st.info("版本: v2.0.0（全面金额列识别）")
+        st.info("版本: v2.0.0（全面金额列识别，支持中英文混合列名）")
 
     st.title("🔗 订单匹配工具")
     st.markdown("根据订单号匹配汇总表和明细表数据")
