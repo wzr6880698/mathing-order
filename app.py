@@ -184,7 +184,7 @@ def main():
         """)
         st.markdown("---")
         st.markdown("### 版本信息")
-        st.info("版本: v1.13.0（手动指定不填充列 + 数量列转数值）")
+        st.info("版本: v1.14.0（增加排除列验证）")
 
     st.title("🔗 订单匹配工具")
     st.markdown("根据订单号匹配汇总表和明细表数据")
@@ -255,9 +255,22 @@ def main():
                         default=default_exclude,
                         key="exclude_cols"
                     )
+                    st.caption(f"当前选择的排除列: {exclude_columns}")
+
                 # 执行清洗
                 df_detail = clean_dataframe(df_detail_raw, exclude_columns)
                 st.success("✅ 明细表清洗完成（指定列未填充）")
+
+                # 验证排除列是否真的未填充
+                with st.expander("🔍 验证排除列是否未填充"):
+                    if exclude_columns:
+                        # 取第一行数据进行对比（如果数据为空则显示空）
+                        for col in exclude_columns:
+                            raw_val = df_detail_raw[col].iloc[0] if len(df_detail_raw) > 0 else ''
+                            cleaned_val = df_detail[col].iloc[0] if len(df_detail) > 0 else ''
+                            st.write(f"**{col}**: 原始值 = '{raw_val}', 清洗后值 = '{cleaned_val}' -> {'✅ 未变化' if raw_val == cleaned_val else '❌ 已变化'}")
+                    else:
+                        st.info("未选择任何排除列，所有列都会被填充。")
 
                 # 清洗前后订单号列对比（如果检测到推荐列）
                 detail_recommended, _ = detect_column(df_detail_raw, "明细表原始")
