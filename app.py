@@ -32,7 +32,6 @@ def detect_column(df, sheet_desc):
     """
     自动识别订单号列，结合列名关键词和列内数据特征。
     返回 (推荐的列名, 所有列名按得分排序)
-    假设 df 的列名已经过标准化（无空格）。
     """
     keywords = [
         "订单号", "订单编号", "订单", "编号",
@@ -93,6 +92,29 @@ def clean_dataframe(df, exclude_columns=None):
     return df_clean
 
 
+def revert_merge_column(s):
+    """
+    对一列数据进行处理：对于连续相同的非空值，只保留第一个，后面的设为空字符串。
+    用于还原合并单元格效果。
+    """
+    result = s.copy()
+    i = 0
+    while i < len(result):
+        val = result.iloc[i]
+        if val != '':
+            # 找到连续相同值的块
+            j = i + 1
+            while j < len(result) and result.iloc[j] == val:
+                j += 1
+            # 从 i+1 到 j-1 清空
+            for k in range(i+1, j):
+                result.iloc[k] = ''
+            i = j
+        else:
+            i += 1
+    return result
+
+
 def safe_order_str(x):
     """对订单号字符串进行简单清理：去除首尾空格。"""
     if pd.isna(x):
@@ -103,7 +125,7 @@ def safe_order_str(x):
 def is_numeric_column(col_name):
     """
     判断某列是否应该转换为数值类型（金额、数量等）。
-    关键词已全面覆盖中英文常见表达，包括混合列名。
+    关键词全面覆盖中英文及混合列名。
     """
     numeric_keywords = [
         # 中文金额相关
@@ -166,7 +188,7 @@ def main():
         """)
         st.markdown("---")
         st.markdown("### 版本信息")
-        st.info("版本: v2.0.0（全面金额列识别，支持中英文混合列名）")
+        st.info("版本: v2.2.0（支持还原合并单元格效果）")
 
     st.title("🔗 订单匹配工具")
     st.markdown("根据订单号匹配汇总表和明细表数据")
@@ -243,6 +265,19 @@ def main():
 
                 df_detail = clean_dataframe(df_detail_raw, exclude_columns)
                 st.success("✅ 明细表清洗完成（指定列未填充）")
+
+                # 新增选项：还原合并单元格效果（仅对排除列生效）
+                revert_merge = st.checkbox(
+                    "🔄 还原合并单元格效果（仅保留每块第一行，适用于金额列）",
+                    value=False,
+                    key="revert_merge",
+                    help="勾选后，对排除列中连续相同的非空值，只保留第一行，其余清空。请谨慎使用，仅当确认这些值是由合并单元格产生时勾选。"
+                )
+
+                if revert_merge and exclude_columns:
+                    for col in exclude_columns:
+                        df_detail[col] = revert_merge_column(df_detail[col])
+                    st.success("✅ 已对排除列应用还原合并单元格效果。")
 
                 # 验证金额列（显示排除状态和对比）
                 with st.expander("🔍 金额列清洗前后对比（前5行）"):
