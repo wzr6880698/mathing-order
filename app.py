@@ -163,7 +163,7 @@ def main():
         """)
         st.markdown("---")
         st.markdown("### 版本信息")
-        st.info("版本: v1.16.0（修复列名匹配问题）")
+        st.info("版本: v1.17.0（增强排除列验证）")
 
     st.title("🔗 订单匹配工具")
     st.markdown("根据订单号匹配汇总表和明细表数据")
@@ -236,13 +236,14 @@ def main():
                 df_detail = clean_dataframe(df_detail_raw, exclude_columns)
                 st.success("✅ 明细表清洗完成（指定列未填充）")
 
-                # 验证排除列
+                # 验证排除列是否真的未填充（多行对比，并标记变化）
                 if exclude_columns:
                     with st.expander("🔍 验证排除列是否未填充（前5行对比）"):
                         for col in exclude_columns:
                             st.markdown(f"**{col}**")
                             raw_vals = df_detail_raw[col].head(5).tolist()
                             cleaned_vals = df_detail[col].head(5).tolist()
+                            changed = any(r != c for r, c in zip(raw_vals, cleaned_vals))
                             compare_df = pd.DataFrame({
                                 "行号": [f"第{i+1}行" for i in range(5)],
                                 "原始值": raw_vals,
@@ -250,6 +251,10 @@ def main():
                                 "是否一致": [r == c for r, c in zip(raw_vals, cleaned_vals)]
                             })
                             st.dataframe(compare_df, use_container_width=True)
+                            if changed:
+                                st.error(f"❌ 列 '{col}' 的值发生了变化！请检查是否应该被排除，或列名是否完全匹配（含括号、空格）。")
+                            else:
+                                st.success(f"✅ 列 '{col}' 所有值未变化。")
                 else:
                     st.info("未选择任何排除列，所有列都会被填充。")
 
