@@ -97,20 +97,19 @@ def detect_column(df, sheet_desc):
 
 def clean_dataframe(df, exclude_columns=None):
     """
-    清洗DataFrame：对非排除列进行向前填充，排除列保持不变。
-    排除列通常为金额列。
-    先将空字符串替换为 NaN，填充后再将 NaN 替换回空字符串。
+    清洗DataFrame：对非排除列进行向前填充，排除列保持原始值不变。
+    排除列通常为金额、数量列。
     """
     if exclude_columns is None:
         exclude_columns = []
-    # 将空字符串替换为 NaN
-    df_clean = df.replace(r'^\s*$', np.nan, regex=True)
+    df_clean = df.copy()
     for col in df_clean.columns:
         if col not in exclude_columns:
-            # 对非排除列进行填充
+            # 对非排除列：将空字符串转为 NaN，向前填充，再将 NaN 转回空字符串
+            df_clean[col] = df_clean[col].replace(r'^\s*$', np.nan, regex=True)
             df_clean[col] = df_clean[col].ffill()
-    # 将 NaN 替换回空字符串
-    df_clean = df_clean.fillna('')
+            df_clean[col] = df_clean[col].fillna('')
+    # 排除列完全保持原样，不做任何处理
     return df_clean
 
 
@@ -184,7 +183,7 @@ def main():
         """)
         st.markdown("---")
         st.markdown("### 版本信息")
-        st.info("版本: v1.14.0（增加排除列验证）")
+        st.info("版本: v1.15.0（排除列完全保留原始值，多行验证）")
 
     st.title("🔗 订单匹配工具")
     st.markdown("根据订单号匹配汇总表和明细表数据")
@@ -261,16 +260,22 @@ def main():
                 df_detail = clean_dataframe(df_detail_raw, exclude_columns)
                 st.success("✅ 明细表清洗完成（指定列未填充）")
 
-                # 验证排除列是否真的未填充
-                with st.expander("🔍 验证排除列是否未填充"):
-                    if exclude_columns:
-                        # 取第一行数据进行对比（如果数据为空则显示空）
+                # 验证排除列是否真的未填充（多行对比）
+                if exclude_columns:
+                    with st.expander("🔍 验证排除列是否未填充（前5行对比）"):
                         for col in exclude_columns:
-                            raw_val = df_detail_raw[col].iloc[0] if len(df_detail_raw) > 0 else ''
-                            cleaned_val = df_detail[col].iloc[0] if len(df_detail) > 0 else ''
-                            st.write(f"**{col}**: 原始值 = '{raw_val}', 清洗后值 = '{cleaned_val}' -> {'✅ 未变化' if raw_val == cleaned_val else '❌ 已变化'}")
-                    else:
-                        st.info("未选择任何排除列，所有列都会被填充。")
+                            st.markdown(f"**{col}**")
+                            raw_vals = df_detail_raw[col].head(5).tolist()
+                            cleaned_vals = df_detail[col].head(5).tolist()
+                            compare_df = pd.DataFrame({
+                                "行号": [f"第{i+1}行" for i in range(5)],
+                                "原始值": raw_vals,
+                                "清洗后值": cleaned_vals,
+                                "是否一致": [r == c for r, c in zip(raw_vals, cleaned_vals)]
+                            })
+                            st.dataframe(compare_df, use_container_width=True)
+                else:
+                    st.info("未选择任何排除列，所有列都会被填充。")
 
                 # 清洗前后订单号列对比（如果检测到推荐列）
                 detail_recommended, _ = detect_column(df_detail_raw, "明细表原始")
