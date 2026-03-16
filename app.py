@@ -95,35 +95,19 @@ def detect_column(df, sheet_desc):
     return recommended, sorted_columns
 
 
-def is_amount_column(col_name):
+def clean_dataframe(df, exclude_columns=None):
     """
-    根据列名判断是否为金额类列（不进行填充，但导出时转为数值）。
-    已扩展关键词，支持外销常见的英文列名。
-    """
-    amount_keywords = [
-        "总价", "金额", "单价", "运费", "改价", "实付款", "结算价",
-        "price", "amount", "freight", "payment", "settlement",
-        # 新增外销关键词
-        "order amount","(Order Amount)", "shipping fee", "discount amount", "unit price",
-        "total amount", "fee", "discount", "shipping","订单总价(Order Amount)"
-    ]
-    col_lower = str(col_name).lower()
-    for kw in amount_keywords:
-        if kw.lower() in col_lower:
-            return True
-    return False
-
-
-def clean_dataframe(df):
-    """
-    清洗DataFrame：对非金额类列进行向前填充，金额类列保持不变。
+    清洗DataFrame：对非排除列进行向前填充，排除列保持不变。
+    排除列通常为金额列。
     先将空字符串替换为 NaN，填充后再将 NaN 替换回空字符串。
     """
+    if exclude_columns is None:
+        exclude_columns = []
     # 将空字符串替换为 NaN
     df_clean = df.replace(r'^\s*$', np.nan, regex=True)
     for col in df_clean.columns:
-        if not is_amount_column(col):
-            # 对非金额列进行填充
+        if col not in exclude_columns:
+            # 对非排除列进行填充
             df_clean[col] = df_clean[col].ffill()
     # 将 NaN 替换回空字符串
     df_clean = df_clean.fillna('')
@@ -137,14 +121,35 @@ def safe_order_str(x):
     return str(x).strip()
 
 
-def convert_amount_columns_to_numeric(df):
+def is_numeric_column(col_name):
     """
-    将DataFrame中的金额类列转换为数值类型（float），
+    判断某列是否应该转换为数值类型（金额、数量等）。
+    """
+    numeric_keywords = [
+        # 金额相关
+        "总价", "金额", "单价", "运费", "改价", "实付款", "结算价",
+        "price", "amount", "freight", "payment", "settlement",
+        "order amount", "shipping fee", "discount amount", "unit price",
+        "total amount", "fee", "discount", "shipping",
+        "initial payment", "balance payment", "tax",
+        # 数量相关
+        "数量", "quantity", "qty"
+    ]
+    col_lower = str(col_name).lower()
+    for kw in numeric_keywords:
+        if kw.lower() in col_lower:
+            return True
+    return False
+
+
+def convert_numeric_columns(df):
+    """
+    将DataFrame中应转为数值的列转换为数值类型（float），
     无法转换的变为 NaN。
     """
     df_numeric = df.copy()
     for col in df_numeric.columns:
-        if is_amount_column(col):
+        if is_numeric_column(col):
             df_numeric[col] = pd.to_numeric(df_numeric[col], errors='coerce')
     return df_numeric
 
@@ -171,15 +176,15 @@ def main():
         ### 功能说明：
         ✅ 自动识别订单号列  
         ✅ 支持手动选择列  
-        ✅ 明细表智能清洗：仅对非金额列（如订单号）填充合并单元格空白，金额列保持原样  
+        ✅ 明细表智能清洗：可手动指定不填充的列（如金额列），避免数值重复  
         ✅ 可下载清洗后明细表（订单号列自动转文本）  
         ✅ 清洗前后订单号对比，便于核对  
-        ✅ 匹配结果中金额列自动转换为数值，无需手动修改格式  
+        ✅ 匹配结果中金额列、数量列自动转换为数值，无需手动修改格式  
         ✅ 汇总表/明细表数据预览，直观选择列  
         """)
         st.markdown("---")
         st.markdown("### 版本信息")
-        st.info("版本: v1.11.1（扩展金额关键词，兼容外销）")
+        st.info("版本: v1.13.0（手动指定不填充列 + 数量列转数值）")
 
     st.title("🔗 订单匹配工具")
     st.markdown("根据订单号匹配汇总表和明细表数据")
@@ -232,14 +237,27 @@ def main():
                     st.caption(f"仅显示前 20 行，共 {len(df_detail_raw)} 行")
 
             clean_option = st.checkbox(
-                "🧹 清洗明细表（仅对非金额列填充合并单元格空白，金额列保持不变）",
+                "🧹 清洗明细表（填充合并单元格空白）",
                 value=True,
                 key="clean_detail",
-                help="勾选后，将对非金额列（如订单号）进行向下填充，金额列（如总价、实付款）保持原样。"
+                help="勾选后，可指定不填充的列（如金额列），避免数值重复。"
             )
+
+            exclude_columns = []
             if clean_option:
-                df_detail = clean_dataframe(df_detail_raw)
-                st.success("✅ 明细表清洗完成（非金额列已填充）")
+                # 自动识别可能的金额列作为默认不填充列（基于关键词）
+                default_exclude = [col for col in df_detail_raw.columns if is_numeric_column(col)]
+                with st.expander("⚙️ 高级设置：选择不进行填充的列（通常为金额、数量列）", expanded=True):
+                    st.markdown("以下列将被排除在填充之外，保持原样。您可手动调整。")
+                    exclude_columns = st.multiselect(
+                        "不填充的列",
+                        options=df_detail_raw.columns.tolist(),
+                        default=default_exclude,
+                        key="exclude_cols"
+                    )
+                # 执行清洗
+                df_detail = clean_dataframe(df_detail_raw, exclude_columns)
+                st.success("✅ 明细表清洗完成（指定列未填充）")
 
                 # 清洗前后订单号列对比（如果检测到推荐列）
                 detail_recommended, _ = detect_column(df_detail_raw, "明细表原始")
@@ -344,8 +362,8 @@ def main():
                             st.warning("⚠️ 没有找到任何匹配的订单！")
                             st.info("💡 您可下载清洗后的明细表，并检查上方转换后的订单号样例，确认格式是否一致。")
                         else:
-                            # 将金额列转换为数值类型（便于后续计算和显示）
-                            matched = convert_amount_columns_to_numeric(matched)
+                            # 将数值列（金额、数量等）转换为数值类型
+                            matched = convert_numeric_columns(matched)
 
                             st.success(f"✅ 匹配完成！找到 **{len(matched)}** 条匹配记录")
 
@@ -362,7 +380,7 @@ def main():
                             if len(matched) > 20:
                                 st.caption(f"仅显示前 20 条记录，共 {len(matched)} 条")
 
-                            # 生成下载文件，并对订单号列设置文本格式，金额列自动为数值
+                            # 生成下载文件，并对订单号列设置文本格式
                             output = io.BytesIO()
                             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                                 matched.to_excel(writer, index=False, sheet_name='匹配结果')
@@ -373,7 +391,6 @@ def main():
                                 col_letter = col_num_to_letter(col_idx)
                                 text_format = workbook.add_format({'num_format': '@'})
                                 worksheet.set_column(f'{col_letter}:{col_letter}', None, text_format)
-                                # 可选：将金额列设为数值格式（但默认就是数值，无需额外设置）
                             output.seek(0)
 
                             st.markdown("---")
@@ -386,7 +403,7 @@ def main():
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                 use_container_width=True
                             )
-                            st.info("💡 订单号列已设置为文本格式，金额列已自动转换为数值，无需手动修改。")
+                            st.info("💡 订单号列已设置为文本格式，金额列、数量列已自动转换为数值，无需手动修改。")
                     except Exception as e:
                         st.error(f"❌ 匹配过程中出现错误: {e}")
                         with st.expander("查看详细错误信息"):
