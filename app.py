@@ -83,8 +83,6 @@ def clean_dataframe(df, exclude_columns=None):
     """
     if exclude_columns is None:
         exclude_columns = []
-    # 用 repr 打印排除列列表，以便查看精确字符串（含空格、括号等）
-    st.code(f"清洗函数收到的排除列列表 (repr): {repr(exclude_columns)}")
     df_clean = df.copy()
     for col in df_clean.columns:
         if col not in exclude_columns:
@@ -105,17 +103,19 @@ def safe_order_str(x):
 def is_numeric_column(col_name):
     """
     判断某列是否应该转换为数值类型（金额、数量等）。
-    关键词已扩展，覆盖常见中英文金额列名。
+    关键词已全面覆盖中英文常见表达。
     """
     numeric_keywords = [
-        "总价", "金额", "单价", "运费", "改价", "实付款", "结算价",
+        # 中文金额相关
+        "总价", "金额", "单价", "运费", "改价", "实付款", "结算价", "货品总价",
+        # 英文金额相关
         "price", "amount", "freight", "payment", "settlement",
         "order amount", "shipping fee", "discount amount", "unit price",
         "total amount", "fee", "discount", "shipping",
         "initial payment", "balance payment", "tax",
-        "数量", "quantity", "qty",
-        # 增加外销常见变体
-        "货品总价", "order total", "total price", "product amount"
+        "order total", "total price", "product amount",
+        # 数量相关
+        "数量", "quantity", "qty"
     ]
     col_lower = str(col_name).lower()
     for kw in numeric_keywords:
@@ -166,7 +166,7 @@ def main():
         """)
         st.markdown("---")
         st.markdown("### 版本信息")
-        st.info("版本: v1.19.0（全面金额列验证）")
+        st.info("版本: v2.0.0（全面金额列识别）")
 
     st.title("🔗 订单匹配工具")
     st.markdown("根据订单号匹配汇总表和明细表数据")
@@ -211,7 +211,11 @@ def main():
             # 标准化列名：去除首尾空格
             df_detail_raw.columns = [str(col).strip() for col in df_detail_raw.columns]
             st.info(f"📋 明细表: {len(df_detail_raw)} 行, {len(df_detail_raw.columns)} 列")
-            with st.expander("👀 查看明细表原始数据预览"):
+
+            # 重要提示：pandas 读取时会自动填充合并单元格，因此预览数据已显示填充效果
+            st.warning("⚠️ 注意：预览数据已显示合并单元格的填充效果（即空白已被填充）。实际清洗时，排除列将保持此填充状态，非排除列可能会进一步填充。")
+
+            with st.expander("👀 查看明细表原始数据预览（已填充）"):
                 st.dataframe(df_detail_raw.head(20), use_container_width=True)
                 if len(df_detail_raw) > 20:
                     st.caption(f"仅显示前 20 行，共 {len(df_detail_raw)} 行")
@@ -240,7 +244,7 @@ def main():
                 df_detail = clean_dataframe(df_detail_raw, exclude_columns)
                 st.success("✅ 明细表清洗完成（指定列未填充）")
 
-                # 验证所有金额相关列（无论是否排除）的前5行对比
+                # 验证金额列（显示排除状态和对比）
                 with st.expander("🔍 金额列清洗前后对比（前5行）"):
                     amount_cols = [col for col in df_detail_raw.columns if is_numeric_column(col)]
                     if amount_cols:
@@ -248,26 +252,13 @@ def main():
                             st.markdown(f"**{col}** (排除状态: {'✅ 是' if col in exclude_columns else '❌ 否'})")
                             raw_vals = df_detail_raw[col].head(5).tolist()
                             cleaned_vals = df_detail[col].head(5).tolist()
-                            raw_vals_repr = [repr(v) for v in raw_vals]
-                            cleaned_vals_repr = [repr(v) for v in cleaned_vals]
-                            changed = any(r != c for r, c in zip(raw_vals, cleaned_vals))
                             compare_df = pd.DataFrame({
                                 "行号": [f"第{i+1}行" for i in range(5)],
-                                "原始值 (repr)": raw_vals_repr,
-                                "清洗后值 (repr)": cleaned_vals_repr,
+                                "原始值": raw_vals,
+                                "清洗后值": cleaned_vals,
                                 "是否一致": [r == c for r, c in zip(raw_vals, cleaned_vals)]
                             })
                             st.dataframe(compare_df, use_container_width=True)
-                            if changed:
-                                if col in exclude_columns:
-                                    st.error(f"❌ 列 '{col}' 虽被排除，但值发生了变化！请检查代码。")
-                                else:
-                                    st.warning(f"⚠️ 列 '{col}' 未被排除，值已变化（符合预期）。")
-                            else:
-                                if col in exclude_columns:
-                                    st.success(f"✅ 列 '{col}' 被排除，值未变化。")
-                                else:
-                                    st.info(f"ℹ️ 列 '{col}' 未被排除，但值未变化（可能没有需要填充的空白）。")
                     else:
                         st.info("未检测到金额列。")
 
